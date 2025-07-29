@@ -274,8 +274,7 @@ class FireboltClient:
             self.connection = None
             
             return False, {
-                "error": error_msg,
-                "error_type": self._categorize_error(error_msg)
+                "error": error_msg
             }
     
     async def test_connection(self) -> Tuple[bool, str]:
