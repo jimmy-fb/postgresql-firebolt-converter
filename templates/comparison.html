@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PostgreSQL to Firebolt - Comparison Tester</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css" rel="stylesheet">
+    <style>
+        .CodeMirror { 
+            height: 200px; 
+            font-size: 14px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .result-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .result-failure {
+            background-color: #f8d7da;
+            border: 1px solid #f5c2c7;
+            color: #842029;
+        }
+        .similarity-bar {
+            height: 20px;
+            background: linear-gradient(to right, #dc3545 0%, #ffc107 50%, #28a745 100%);
+            border-radius: 10px;
+            position: relative;
+        }
+        .similarity-indicator {
+            position: absolute;
+            width: 3px;
+            height: 24px;
+            background: #fff;
+            border: 2px solid #000;
+            border-radius: 2px;
+            top: -2px;
+            transform: translateX(-50%);
+        }
+        .diff-container {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .header-section {
+            background: linear-gradient(135deg, #20c997 0%, #17a2b8 100%);
+            color: white;
+            padding: 40px 0;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header Section -->
+    <div class="header-section">
+        <div class="container">
+            <div class="row">
+                <div class="col-lg-8 mx-auto text-center">
+                    <h1 class="display-4 mb-3">Comparison Tester</h1>
+                    <p class="lead">Test converter accuracy against known correct Firebolt syntax</p>
+                    <a href="/" class="btn btn-outline-light">← Back to Converter</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Input Section -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="mb-0">Query Comparison Test</h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- PostgreSQL Query -->
+                        <div class="mb-4">
+                            <label for="postgresql-query" class="form-label">
+                                <strong>PostgreSQL Query</strong>
+                            </label>
+                            <textarea id="postgresql-query" class="form-control" placeholder="Enter your PostgreSQL query here...">SELECT data->>'name' as user_name, created_at::date FROM users WHERE data @> '{"active": true}';</textarea>
+                        </div>
+
+                        <!-- Expected Firebolt Query -->
+                        <div class="mb-4">
+                            <label for="expected-query" class="form-label">
+                                <strong>Expected Firebolt Query</strong>
+                            </label>
+                            <textarea id="expected-query" class="form-control" placeholder="Enter the expected Firebolt query...">SELECT JSON_EXTRACT_RAW(data, '$.name') as user_name, CAST(created_at AS DATE) FROM users WHERE JSON_CONTAINS(data, '{"active": true}');</textarea>
+                        </div>
+
+                        <!-- Compare Button -->
+                        <div class="text-center mb-4">
+                            <button id="compare-btn" class="btn btn-primary btn-lg" onclick="compareQueries()">
+                                <span id="compare-text">🔍 Compare Queries</span>
+                                <span id="compare-spinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
+                            </button>
+                        </div>
+
+                        <!-- Results Section -->
+                        <div id="results-section" style="display: none;">
+                            <!-- Match Status -->
+                            <div id="match-status" class="alert mb-4"></div>
+
+                            <!-- Similarity Score -->
+                            <div class="card mb-4">
+                                <div class="card-body">
+                                    <h5>Similarity Score</h5>
+                                    <div class="similarity-bar">
+                                        <div id="similarity-indicator" class="similarity-indicator"></div>
+                                    </div>
+                                    <div class="text-center mt-2">
+                                        <span id="similarity-score" class="h4">---%</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Converter Output -->
+                            <div class="mb-4">
+                                <label for="converted-query" class="form-label">
+                                    <strong>Converter Output</strong>
+                                </label>
+                                <textarea id="converted-query" class="form-control" readonly></textarea>
+                            </div>
+
+                            <!-- Differences -->
+                            <div id="diff-section" class="mb-4" style="display: none;">
+                                <h5>Differences</h5>
+                                <div id="diff-content" class="diff-container"></div>
+                            </div>
+
+                            <!-- Warnings -->
+                            <div id="warnings-section" class="mb-4" style="display: none;">
+                                <h5>⚠️ Warnings</h5>
+                                <div id="warnings-content" class="alert alert-warning"></div>
+                            </div>
+
+                            <!-- Explanations -->
+                            <div id="explanations-section" class="mb-4" style="display: none;">
+                                <h5>✅ Conversions Applied</h5>
+                                <div id="explanations-content" class="alert alert-info"></div>
+                            </div>
+                        </div>
+
+                        <!-- Error Section -->
+                        <div id="error-section" class="alert alert-danger" style="display: none;">
+                            <h5>❌ Error</h5>
+                            <div id="error-content"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sample Test Cases -->
+        <div class="row mt-5">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h4 class="mb-0">Sample Test Cases</h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <button class="btn btn-outline-primary btn-sm mb-2 w-100" onclick="loadSampleTest('json')">
+                                    JSON Operations
+                                </button>
+                                <button class="btn btn-outline-primary btn-sm mb-2 w-100" onclick="loadSampleTest('casting')">
+                                    Type Casting
+                                </button>
+                            </div>
+                            <div class="col-md-6">
+                                <button class="btn btn-outline-primary btn-sm mb-2 w-100" onclick="loadSampleTest('dates')">
+                                    Date Functions
+                                </button>
+                                <button class="btn btn-outline-primary btn-sm mb-2 w-100" onclick="loadSampleTest('strings')">
+                                    String Operations
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/sql/sql.min.js"></script>
+
+    <script>
+        // Initialize CodeMirror editors
+        let postgresqlEditor, expectedEditor, convertedEditor;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize PostgreSQL editor
+            postgresqlEditor = CodeMirror.fromTextArea(document.getElementById('postgresql-query'), {
+                mode: 'sql',
+                theme: 'monokai',
+                lineNumbers: true,
+                lineWrapping: true
+            });
+
+            // Initialize Expected editor
+            expectedEditor = CodeMirror.fromTextArea(document.getElementById('expected-query'), {
+                mode: 'sql',
+                theme: 'monokai',
+                lineNumbers: true,
+                lineWrapping: true
+            });
+
+            // Initialize Converted editor (read-only)
+            convertedEditor = CodeMirror.fromTextArea(document.getElementById('converted-query'), {
+                mode: 'sql',
+                theme: 'monokai',
+                lineNumbers: true,
+                lineWrapping: true,
+                readOnly: true
+            });
+        });
+
+        async function compareQueries() {
+            const compareBtn = document.getElementById('compare-btn');
+            const compareText = document.getElementById('compare-text');
+            const compareSpinner = document.getElementById('compare-spinner');
+            const resultsSection = document.getElementById('results-section');
+            const errorSection = document.getElementById('error-section');
+
+            // Get queries from CodeMirror
+            const postgresqlQuery = postgresqlEditor.getValue().trim();
+            const expectedQuery = expectedEditor.getValue().trim();
+
+            if (!postgresqlQuery) {
+                alert('Please enter a PostgreSQL query');
+                return;
+            }
+
+            if (!expectedQuery) {
+                alert('Please enter the expected Firebolt query');
+                return;
+            }
+
+            // Show loading state
+            compareBtn.disabled = true;
+            compareText.classList.add('d-none');
+            compareSpinner.classList.remove('d-none');
+
+            try {
+                const response = await fetch('/api/compare', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        postgresql_query: postgresqlQuery,
+                        expected_firebolt: expectedQuery
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    displayComparisonResults(result);
+                    errorSection.style.display = 'none';
+                } else {
+                    displayError(result.error);
+                    resultsSection.style.display = 'none';
+                }
+
+            } catch (error) {
+                displayError('Network error: ' + error.message);
+                resultsSection.style.display = 'none';
+            } finally {
+                // Hide loading state
+                compareBtn.disabled = false;
+                compareText.classList.remove('d-none');
+                compareSpinner.classList.add('d-none');
+            }
+        }
+
+        function displayComparisonResults(result) {
+            // Set converted query
+            convertedEditor.setValue(result.converted_query);
+
+            // Match status
+            const matchStatus = document.getElementById('match-status');
+            if (result.exact_match) {
+                matchStatus.className = 'alert mb-4 result-success';
+                matchStatus.innerHTML = '<h5>✅ EXACT MATCH!</h5><p>The converter output matches your expected result exactly.</p>';
+            } else {
+                matchStatus.className = 'alert mb-4 result-failure';
+                matchStatus.innerHTML = '<h5>❌ NO MATCH</h5><p>The converter output differs from your expected result.</p>';
+            }
+
+            // Similarity score
+            const score = result.similarity_score;
+            document.getElementById('similarity-score').textContent = score + '%';
+            const indicator = document.getElementById('similarity-indicator');
+            indicator.style.left = score + '%';
+
+            // Show differences if not exact match
+            const diffSection = document.getElementById('diff-section');
+            if (!result.exact_match && result.diff) {
+                document.getElementById('diff-content').textContent = result.diff;
+                diffSection.style.display = 'block';
+            } else {
+                diffSection.style.display = 'none';
+            }
+
+            // Display warnings if any
+            const warningsSection = document.getElementById('warnings-section');
+            const warningsContent = document.getElementById('warnings-content');
+            if (result.warnings && result.warnings.length > 0) {
+                warningsContent.innerHTML = '<ul>' + result.warnings.map(w => '<li>' + w + '</li>').join('') + '</ul>';
+                warningsSection.style.display = 'block';
+            } else {
+                warningsSection.style.display = 'none';
+            }
+
+            // Display explanations if any
+            const explanationsSection = document.getElementById('explanations-section');
+            const explanationsContent = document.getElementById('explanations-content');
+            if (result.explanations && result.explanations.length > 0) {
+                explanationsContent.innerHTML = '<ul>' + result.explanations.map(e => '<li>' + e + '</li>').join('') + '</ul>';
+                explanationsSection.style.display = 'block';
+            } else {
+                explanationsSection.style.display = 'none';
+            }
+
+            document.getElementById('results-section').style.display = 'block';
+        }
+
+        function displayError(error) {
+            document.getElementById('error-content').textContent = error;
+            document.getElementById('error-section').style.display = 'block';
+        }
+
+        function loadSampleTest(testType) {
+            const samples = {
+                'json': {
+                    postgresql: "SELECT data->>'name' as user_name, data->'profile'->>'age' as age FROM users WHERE data @> '{\"active\": true}';",
+                    expected: "SELECT JSON_EXTRACT_RAW(data, '$.name') as user_name, JSON_EXTRACT_RAW(JSON_EXTRACT(data, '$.profile'), '$.age') as age FROM users WHERE JSON_CONTAINS(data, '{\"active\": true}');"
+                },
+                'casting': {
+                    postgresql: "SELECT id::text, amount::decimal(10,2), created_at::date FROM orders;",
+                    expected: "SELECT CAST(id AS TEXT), CAST(amount AS DECIMAL(10,2)), CAST(created_at AS DATE) FROM orders;"
+                },
+                'dates': {
+                    postgresql: "SELECT now() as current_time, date_trunc('day', created_at) as day_created FROM events;",
+                    expected: "SELECT CURRENT_TIMESTAMP as current_time, DATE_TRUNC('day', created_at) as day_created FROM events;"
+                },
+                'strings': {
+                    postgresql: "SELECT first_name || ' ' || last_name as full_name, position('test' in description) FROM users;",
+                    expected: "SELECT CONCAT(CONCAT(first_name, ' '), last_name) as full_name, POSITION('test', description) FROM users;"
+                }
+            };
+
+            const sample = samples[testType];
+            if (sample) {
+                postgresqlEditor.setValue(sample.postgresql);
+                expectedEditor.setValue(sample.expected);
+            }
+        }
+    </script>
+</body>
+</html> 
