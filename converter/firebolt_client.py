@@ -18,7 +18,7 @@ class FireboltClient:
     Firebolt client using the official Firebolt Python SDK
     """
     
-    def __init__(self, client_id: str, client_secret: str, account: str, database: str, engine: str = None):
+    def __init__(self, client_id: str = None, client_secret: str = None, account: str = None, database: str = None, engine: str = None):
         self.client_id = client_id
         self.client_secret = client_secret
         self.account = account
@@ -27,6 +27,40 @@ class FireboltClient:
         self.connection = None
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         
+    async def connect(self, client_id: str = None, client_secret: str = None, account: str = None, database: str = None, engine: str = None) -> bool:
+        """
+        Connect to Firebolt with provided credentials
+        
+        Args:
+            client_id: Firebolt client ID
+            client_secret: Firebolt client secret  
+            account: Firebolt account name
+            database: Firebolt database name
+            engine: Firebolt engine name (optional)
+            
+        Returns:
+            bool: True if connection successful, False otherwise
+        """
+        # Update instance variables with provided credentials
+        if client_id:
+            self.client_id = client_id
+        if client_secret:
+            self.client_secret = client_secret
+        if account:
+            self.account = account
+        if database:
+            self.database = database
+        if engine:
+            self.engine = engine
+            
+        # Validate we have all required credentials
+        if not all([self.client_id, self.client_secret, self.account, self.database]):
+            logger.error("Missing required Firebolt credentials")
+            return False
+            
+        # Attempt to authenticate
+        return await self.authenticate()
+    
     async def authenticate(self) -> bool:
         """
         Establish connection to Firebolt using the official SDK
