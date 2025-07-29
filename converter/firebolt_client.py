@@ -28,24 +28,56 @@ class FireboltClient:
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         
         # Store original credentials for restoration if needed
-        self._original_credentials = {
-            'client_id': client_id,
-            'client_secret': client_secret,
-            'account': account,
-            'database': database,
-            'engine': engine
-        }
+        # Only store non-None values
+        self._original_credentials = {}
+        if client_id:
+            self._original_credentials['client_id'] = client_id
+        if client_secret:
+            self._original_credentials['client_secret'] = client_secret
+        if account:
+            self._original_credentials['account'] = account
+        if database:
+            self._original_credentials['database'] = database
+        if engine:
+            self._original_credentials['engine'] = engine
         
     def _restore_credentials(self):
         """Restore credentials if they were lost"""
-        if not all([self.client_id, self.client_secret, self.account, self.database]):
-            logger.warning("Credentials lost, restoring from backup...")
+        restored = False
+        if not self.client_id and 'client_id' in self._original_credentials:
             self.client_id = self._original_credentials['client_id']
+            restored = True
+        if not self.client_secret and 'client_secret' in self._original_credentials:
             self.client_secret = self._original_credentials['client_secret']
+            restored = True
+        if not self.account and 'account' in self._original_credentials:
             self.account = self._original_credentials['account']
+            restored = True
+        if not self.database and 'database' in self._original_credentials:
             self.database = self._original_credentials['database']
+            restored = True
+        if not self.engine and 'engine' in self._original_credentials:
             self.engine = self._original_credentials['engine']
+            restored = True
             
+        if restored:
+            logger.info("✅ Successfully restored credentials from backup")
+            logger.info(f"   Client ID present: {bool(self.client_id)}")
+            logger.info(f"   Account: {self.account}")
+            logger.info(f"   Database: {self.database}")
+        else:
+            logger.warning("⚠️ Could not restore credentials - backup may be empty")
+            
+    def _debug_credential_state(self):
+        """Debug method to log current credential state"""
+        logger.info("🔍 Current credential state:")
+        logger.info(f"   client_id: {'✅' if self.client_id else '❌'}")
+        logger.info(f"   client_secret: {'✅' if self.client_secret else '❌'}")
+        logger.info(f"   account: {'✅' if self.account else '❌'} ({self.account})")
+        logger.info(f"   database: {'✅' if self.database else '❌'} ({self.database})")
+        logger.info(f"   engine: {'✅' if self.engine else '❌'} ({self.engine})")
+        logger.info(f"   backup keys: {list(self._original_credentials.keys())}")
+             
     async def connect(self, client_id: str = None, client_secret: str = None, account: str = None, database: str = None, engine: str = None) -> bool:
         """
         Connect to Firebolt with provided credentials
@@ -63,27 +95,35 @@ class FireboltClient:
         # Update instance variables with provided credentials
         if client_id:
             self.client_id = client_id
+            self._original_credentials['client_id'] = client_id
         if client_secret:
             self.client_secret = client_secret
+            self._original_credentials['client_secret'] = client_secret
         if account:
             self.account = account
+            self._original_credentials['account'] = account
         if database:
             self.database = database
+            self._original_credentials['database'] = database
         if engine:
             self.engine = engine
+            self._original_credentials['engine'] = engine
             
-        # Update backup credentials
-        self._original_credentials.update({
-            'client_id': self.client_id,
-            'client_secret': self.client_secret,
-            'account': self.account,
-            'database': self.database,
-            'engine': self.engine
-        })
+        logger.info(f"🔐 Credentials updated:")
+        logger.info(f"   Client ID present: {bool(self.client_id)}")
+        logger.info(f"   Account: {self.account}")
+        logger.info(f"   Database: {self.database}")
+        logger.info(f"   Engine: {self.engine}")
+        logger.info(f"   Backup size: {len(self._original_credentials)} credentials stored")
             
         # Validate we have all required credentials
         if not all([self.client_id, self.client_secret, self.account, self.database]):
-            logger.error("Missing required Firebolt credentials")
+            missing = []
+            if not self.client_id: missing.append("client_id")
+            if not self.client_secret: missing.append("client_secret")
+            if not self.account: missing.append("account")
+            if not self.database: missing.append("database")
+            logger.error(f"Missing required Firebolt credentials: {missing}")
             return False
             
         # Attempt to authenticate
@@ -97,9 +137,6 @@ class FireboltClient:
             bool: True if connection successful, False otherwise
         """
         try:
-            # Try to restore credentials if they were lost
-            self._restore_credentials()
-            
             logger.info(f"Attempting authentication for account: {self.account}")
             logger.info(f"Database: {self.database}, Engine: {self.engine}")
             logger.info(f"Client ID present: {bool(self.client_id)}")
@@ -151,29 +188,42 @@ class FireboltClient:
         Returns:
             bool: True if authenticated, False otherwise
         """
-        # Always try to restore credentials first
-        self._restore_credentials()
+        # Always try to restore credentials first if any are missing
+        if not all([self.client_id, self.client_secret, self.account, self.database]):
+            logger.warning("🔧 Some credentials missing, attempting restore...")
+            logger.debug("Before restore:")
+            self._debug_credential_state()
+            self._restore_credentials()
+            logger.debug("After restore:")
+            self._debug_credential_state()
         
         if not self.connection:
             logger.info("No active connection, attempting to authenticate...")
             return await self.authenticate()
         
-        # Test the existing connection
+        # Test the existing connection with a simple query
         try:
             def _test_connection():
                 cursor = self.connection.cursor()
                 cursor.execute("SELECT 1")
+                cursor.fetchone()
                 return True
             
             await asyncio.get_event_loop().run_in_executor(
                 self.executor, _test_connection
             )
-            logger.info("Existing connection is valid")
+            logger.debug("Existing connection is valid")
             return True
             
         except Exception as e:
             logger.warning(f"Existing connection failed test: {str(e)}, re-authenticating...")
             self.connection = None
+            # Restore credentials before re-authenticating
+            logger.debug("Before restore after connection failure:")
+            self._debug_credential_state()
+            self._restore_credentials()
+            logger.debug("After restore after connection failure:")
+            self._debug_credential_state()
             return await self.authenticate()
     
     async def execute_query(self, sql: str) -> Tuple[bool, Dict[str, Any]]:
