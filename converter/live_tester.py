@@ -160,6 +160,9 @@ class LiveQueryTester:
             is_repeated_error = len(error_history.get(error_message, [])) > 1
             previous_attempts = error_history.get(error_message, [])
             
+            # Analyze the specific error to provide targeted guidance
+            specific_guidance = self._get_specific_error_guidance(error_message)
+            
             if is_repeated_error:
                 logger.warning(f"🔄 REPEATED ERROR: This same error occurred in attempts: {previous_attempts}")
                 # For repeated errors, be more explicit and demanding
@@ -175,16 +178,11 @@ Current attempt: {attempt}
 ⚠️ IMPORTANT: Your previous {len(previous_attempts)} attempts to fix this error COMPLETELY FAILED. 
 The query above is still causing the exact same error. You MUST try a RADICALLY different approach.
 
-🛠️ SPECIFIC FIXES NEEDED:
-- If error mentions "JSONExtract": Replace with JSON_POINTER_EXTRACT_TEXT(column, '/path')
-- If error mentions "extract()": Wrap input with CAST(column AS TIMESTAMP)  
-- If error mentions "FILTER": Convert to CASE WHEN ... THEN ... ELSE 0 END
-- If error mentions "not supported": Find alternative Firebolt function
-- If error mentions missing column: Add proper JOIN or remove reference
-- If error mentions casting: Use CAST(value AS TYPE) not value::TYPE
+{specific_guidance}
 
 🎯 YOU MUST CHANGE THE QUERY SIGNIFICANTLY. Don't just return the same query.
 Provide ONLY the corrected Firebolt SQL that will NOT produce this error:"""
+            
             else:
                 logger.info(f"🆕 NEW ERROR: First time seeing this error")
                 # For new errors, be more specific about the exact issue
@@ -195,16 +193,7 @@ Provide ONLY the corrected Firebolt SQL that will NOT produce this error:"""
 🔥 FAILING QUERY:
 {query}
 
-🛠️ ANALYSIS NEEDED:
-Look at the error message above and identify exactly what's wrong with the query.
-
-🎯 SPECIFIC FIXES:
-- If "JSONExtract": Use JSON_POINTER_EXTRACT_TEXT(column, '/path') instead
-- If "extract()": Wrap with CAST(column AS TIMESTAMP)
-- If "FILTER": Use CASE WHEN instead of FILTER clause
-- If "not supported": Find Firebolt equivalent function
-- If missing column: Check JOINs and table aliases
-- If casting error: Use CAST(value AS TYPE) syntax
+{specific_guidance}
 
 ✅ Provide ONLY the corrected Firebolt SQL that fixes this specific error:"""
             
@@ -217,11 +206,11 @@ Look at the error message above and identify exactly what's wrong with the query
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a Firebolt SQL expert. When given an error, you MUST modify the query to fix it. Never return the same query unchanged. JSONExtract() does not exist - use JSON_POINTER_EXTRACT_TEXT() instead. Be creative with fixes for repeated errors."},
+                    {"role": "system", "content": "You are a Firebolt SQL expert. When given an error, you MUST modify the query to fix it. Never return the same query unchanged. Analyze the specific error message carefully and make targeted fixes."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,  # Increase temperature for more varied responses
-                max_tokens=2000
+                temperature=0.7,  # Increase temperature for more varied responses
+                max_tokens=3000
             )
             
             corrected = response.choices[0].message.content.strip()
@@ -231,40 +220,114 @@ Look at the error message above and identify exactly what's wrong with the query
             logger.info(corrected)
             logger.info(f"=" * 80)
             
-            # Show detailed comparison
+            # Clean up the response
+            corrected = self._clean_sql_response(corrected)
+            
+            # Check if OpenAI returned the same query
             logger.info(f"📊 COMPARISON:")
             logger.info(f"Original query length: {len(query)}")
             logger.info(f"OpenAI response length: {len(corrected)}")
-            logger.info(f"Are they identical? {corrected == query}")
+            logger.info(f"Are they identical? {query.strip() == corrected.strip()}")
             
-            # Clean up any markdown formatting
-            if corrected.startswith('```sql'):
-                corrected = corrected[6:]
-            elif corrected.startswith('```'):
-                corrected = corrected[3:]
-            if corrected.endswith('```'):
-                corrected = corrected[:-3]
-                
-            corrected = corrected.strip()
+            # Additional cleanup 
+            corrected_cleaned = self._normalize_sql(corrected)
+            original_cleaned = self._normalize_sql(query)
             
             logger.info(f"📝 AFTER CLEANUP:")
-            logger.info(f"Cleaned query length: {len(corrected)}")
-            logger.info(f"Are they identical after cleanup? {corrected == query}")
+            logger.info(f"Cleaned query length: {len(corrected_cleaned)}")
+            logger.info(f"Are they identical after cleanup? {original_cleaned == corrected_cleaned}")
             
-            if corrected and corrected != query:
-                logger.info("✅ Got OpenAI conversion to Firebolt")
-                return corrected
-            else:
-                logger.warning("⚠️ OpenAI returned same/empty query:")
+            # If OpenAI returned same/empty query, return None to skip this attempt
+            if not corrected.strip() or corrected_cleaned == original_cleaned:
+                logger.warning(f"⚠️ OpenAI returned same/empty query:")
                 logger.warning(f"   - Original query preview: {query[:100]}...")
                 logger.warning(f"   - OpenAI response preview: {corrected[:100]}...")
-                logger.warning(f"   - Empty response? {not corrected}")
-                logger.warning(f"   - Identical? {corrected == query}")
+                logger.warning(f"   - Empty response? {not corrected.strip()}")
+                logger.warning(f"   - Identical? {corrected_cleaned == original_cleaned}")
                 return None
-                
+            
+            return corrected
+            
         except Exception as e:
-            logger.error(f"❌ OpenAI conversion failed: {str(e)}")
+            logger.error(f"OpenAI correction failed: {str(e)}")
             return None
+
+    def _get_specific_error_guidance(self, error_message: str) -> str:
+        """Provide specific guidance based on the exact error message"""
+        
+        # Convert to lowercase for easier matching
+        error_lower = error_message.lower()
+        
+        if "extract()" in error_lower and "date, timestamp, or timestamptz" in error_lower:
+            return """🛠️ SPECIFIC FIX FOR EXTRACT ERROR:
+The error says EXTRACT() needs DATE, TIMESTAMP, or TIMESTAMPTZ input.
+- Find the EXTRACT() function in your query
+- The input column needs to be cast to proper date/timestamp type
+- Use: EXTRACT(YEAR FROM CAST(your_column AS TIMESTAMP))
+- DO NOT use JSON functions for this - this is a date casting issue
+- Example: EXTRACT(YEAR FROM now()) → EXTRACT(YEAR FROM CAST(date_column AS TIMESTAMP))"""
+        
+        elif "json_pointer_extract_text" in error_lower and "double precision" in error_lower:
+            return """🛠️ SPECIFIC FIX FOR JSON FUNCTION ERROR:
+You're trying to use JSON_POINTER_EXTRACT_TEXT on a NUMERIC column!
+- JSON_POINTER_EXTRACT_TEXT only works on TEXT columns containing JSON
+- You have a NUMERIC (double precision) column, not a JSON column
+- REMOVE the JSON_POINTER_EXTRACT_TEXT wrapper entirely
+- Just use the column directly: column_name (not JSON_POINTER_EXTRACT_TEXT(column_name, '/'))
+- Example: JSON_POINTER_EXTRACT_TEXT(amount, '/') → amount"""
+        
+        elif "jsonextract" in error_lower:
+            return """🛠️ SPECIFIC FIX FOR JSONExtract ERROR:
+- JSONExtract() does not exist in Firebolt
+- Use JSON_POINTER_EXTRACT_TEXT(column, '/path') for JSON data
+- But ONLY if the column actually contains JSON text data
+- For regular columns, don't use JSON functions at all"""
+        
+        elif "filter" in error_lower and "not supported" in error_lower:
+            return """🛠️ SPECIFIC FIX FOR FILTER ERROR:
+- FILTER clause is not supported in Firebolt
+- Convert: SUM(amount) FILTER (WHERE condition)
+- To: SUM(CASE WHEN condition THEN amount ELSE 0 END)"""
+        
+        elif "function signature" in error_lower and "not found" in error_lower:
+            return """🛠️ SPECIFIC FIX FOR FUNCTION SIGNATURE ERROR:
+- You're using a function with wrong parameter types
+- Check the function documentation for correct parameter types
+- Make sure you're not mixing JSON functions with numeric columns
+- Cast parameters to the correct type if needed"""
+        
+        else:
+            return """🛠️ GENERAL TROUBLESHOOTING:
+- Read the error message carefully and fix the exact issue mentioned
+- Don't apply generic fixes that don't match the specific error
+- Test your understanding: what is the error actually saying?
+- Make targeted changes, don't change unrelated parts of the query"""
+
+    def _clean_sql_response(self, response: str) -> str:
+        """Clean up OpenAI response by removing markdown formatting and extra whitespace"""
+        if not response:
+            return ""
+            
+        # Remove markdown code blocks
+        if response.startswith('```sql'):
+            response = response[6:]
+        elif response.startswith('```'):
+            response = response[3:]
+        if response.endswith('```'):
+            response = response[:-3]
+            
+        return response.strip()
+
+    def _normalize_sql(self, sql: str) -> str:
+        """Normalize SQL for comparison by removing extra whitespace and standardizing case"""
+        if not sql:
+            return ""
+            
+        # Remove extra whitespace and normalize
+        normalized = ' '.join(sql.strip().split())
+        # Remove semicolons for comparison
+        normalized = normalized.rstrip(';')
+        return normalized.lower()
     
     async def _get_openai_correction(self, query: str, error_message: str) -> Optional[str]:
         """REMOVED - Only using simplified OpenAI approach now"""
