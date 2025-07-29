@@ -60,6 +60,9 @@ logs/
 # Saved connections (contains credentials)
 saved_connections.json
 
+# Streamlit secrets (contains credentials)
+.streamlit/secrets.toml
+
 # Temporary files
 *.tmp
 *.temp

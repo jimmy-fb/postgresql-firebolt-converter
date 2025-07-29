@@ -27,6 +27,25 @@ class FireboltClient:
         self.connection = None
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         
+        # Store original credentials for restoration if needed
+        self._original_credentials = {
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'account': account,
+            'database': database,
+            'engine': engine
+        }
+        
+    def _restore_credentials(self):
+        """Restore credentials if they were lost"""
+        if not all([self.client_id, self.client_secret, self.account, self.database]):
+            logger.warning("Credentials lost, restoring from backup...")
+            self.client_id = self._original_credentials['client_id']
+            self.client_secret = self._original_credentials['client_secret']
+            self.account = self._original_credentials['account']
+            self.database = self._original_credentials['database']
+            self.engine = self._original_credentials['engine']
+            
     async def connect(self, client_id: str = None, client_secret: str = None, account: str = None, database: str = None, engine: str = None) -> bool:
         """
         Connect to Firebolt with provided credentials
@@ -53,6 +72,15 @@ class FireboltClient:
         if engine:
             self.engine = engine
             
+        # Update backup credentials
+        self._original_credentials.update({
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'account': self.account,
+            'database': self.database,
+            'engine': self.engine
+        })
+            
         # Validate we have all required credentials
         if not all([self.client_id, self.client_secret, self.account, self.database]):
             logger.error("Missing required Firebolt credentials")
@@ -69,7 +97,27 @@ class FireboltClient:
             bool: True if connection successful, False otherwise
         """
         try:
+            # Try to restore credentials if they were lost
+            self._restore_credentials()
+            
             logger.info(f"Attempting authentication for account: {self.account}")
+            logger.info(f"Database: {self.database}, Engine: {self.engine}")
+            logger.info(f"Client ID present: {bool(self.client_id)}")
+            logger.info(f"Client Secret present: {bool(self.client_secret)}")
+            
+            # Validate all required parameters are present
+            if not self.client_id:
+                logger.error("Missing client_id for authentication")
+                return False
+            if not self.client_secret:
+                logger.error("Missing client_secret for authentication")
+                return False
+            if not self.account:
+                logger.error("Missing account for authentication")
+                return False
+            if not self.database:
+                logger.error("Missing database for authentication")
+                return False
             
             def _connect():
                 auth = ClientCredentials(
@@ -103,9 +151,30 @@ class FireboltClient:
         Returns:
             bool: True if authenticated, False otherwise
         """
+        # Always try to restore credentials first
+        self._restore_credentials()
+        
         if not self.connection:
+            logger.info("No active connection, attempting to authenticate...")
             return await self.authenticate()
-        return True
+        
+        # Test the existing connection
+        try:
+            def _test_connection():
+                cursor = self.connection.cursor()
+                cursor.execute("SELECT 1")
+                return True
+            
+            await asyncio.get_event_loop().run_in_executor(
+                self.executor, _test_connection
+            )
+            logger.info("Existing connection is valid")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Existing connection failed test: {str(e)}, re-authenticating...")
+            self.connection = None
+            return await self.authenticate()
     
     async def execute_query(self, sql: str) -> Tuple[bool, Dict[str, Any]]:
         """
@@ -119,56 +188,44 @@ class FireboltClient:
         try:
             # Ensure we're authenticated
             if not await self.ensure_authenticated():
-                return False, {"error": "Authentication failed", "error_type": "auth_error"}
+                # If authentication failed, check if we still have credentials for better error message
+                if not all([self.client_id, self.client_secret, self.account, self.database]):
+                    error_msg = f"Authentication failed - Missing credentials: client_id={bool(self.client_id)}, client_secret={bool(self.client_secret)}, account={bool(self.account)}, database={bool(self.database)}"
+                    logger.error(error_msg)
+                    return False, {"error": error_msg, "error_type": "auth_error"}
+                else:
+                    return False, {"error": "Authentication failed", "error_type": "auth_error"}
             
-            logger.info(f"Executing query against database: {self.database}, engine: {self.engine}")
-            logger.info(f"Query: {sql}")
-            
+            # Execute query using thread executor to avoid blocking
             def _execute_query():
-                with self.connection.cursor() as cursor:
-                    cursor.execute(sql)
-                    
-                    # Fetch results
-                    results = cursor.fetchall()
-                    
-                    # Get column names
-                    columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                    
-                    # Convert to list of dictionaries
-                    data = [dict(zip(columns, row)) for row in results]
-                    
-                    return data
+                cursor = self.connection.cursor()
+                cursor.execute(sql)
+                results = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                return results, columns
             
-            # Execute query using thread executor
-            data = await asyncio.get_event_loop().run_in_executor(
+            results, columns = await asyncio.get_event_loop().run_in_executor(
                 self.executor, _execute_query
             )
             
-            logger.info("Query executed successfully")
-            return True, {
-                "success": True,
-                "data": data,
-                "rows_affected": len(data),
-                "meta": {"columns": data[0].keys() if data else []}
-            }
-                
-        except Exception as e:
-            error_message = str(e)
-            logger.error(f"Query execution failed: {error_message}")
+            logger.info(f"Query executed successfully, returned {len(results)} rows")
             
-            # Parse common Firebolt errors
-            if "does not exist" in error_message.lower():
-                if "database" in error_message.lower():
-                    error_message = f"Database '{self.database}' not found. Please check the database name in your Firebolt console."
-                elif "engine" in error_message.lower():
-                    error_message = f"Engine '{self.engine}' not found. Please check the engine name or try leaving it empty."
-                elif "table" in error_message.lower():
-                    error_message = f"Table referenced in query does not exist. Please check your table names."
+            return True, {
+                "results": results,
+                "columns": columns,
+                "row_count": len(results)
+            }
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Query execution failed: {error_msg}")
+            
+            # Reset connection on error to force re-authentication on next query
+            self.connection = None
             
             return False, {
-                "success": False,
-                "error": error_message,
-                "error_type": "execution_error"
+                "error": error_msg,
+                "error_type": self._categorize_error(error_msg)
             }
     
     async def test_connection(self) -> Tuple[bool, str]:

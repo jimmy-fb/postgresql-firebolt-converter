@@ -62,10 +62,17 @@ if 'connection_status' not in st.session_state:
 
 def create_components():
     """Initialize the converter components"""
-    openai_api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    # Try to get OpenAI API key from secrets first, then environment
+    openai_api_key = None
+    try:
+        openai_api_key = st.secrets.get("OPENAI_API_KEY")
+    except (FileNotFoundError, KeyError):
+        # Secrets file doesn't exist or key not found, try environment
+        openai_api_key = os.getenv("OPENAI_API_KEY")
     
     if not openai_api_key:
         st.error("⚠️ OpenAI API key not found. Please add it to Streamlit secrets or environment variables.")
+        st.info("💡 For local development, set: `export OPENAI_API_KEY='your_key_here'`")
         return False
     
     try:
@@ -112,12 +119,18 @@ def main():
     # Sidebar for Firebolt connection
     st.sidebar.header("🔗 Firebolt Connection")
     
-    # Try to get credentials from secrets first
-    default_client_id = st.secrets.get("FIREBOLT_CLIENT_ID", "")
-    default_client_secret = st.secrets.get("FIREBOLT_CLIENT_SECRET", "")
-    default_account = st.secrets.get("FIREBOLT_ACCOUNT", "")
-    default_database = st.secrets.get("FIREBOLT_DATABASE", "")
-    default_engine = st.secrets.get("FIREBOLT_ENGINE", "")
+    # Try to get credentials from secrets first, then environment variables
+    def get_secret_or_env(key):
+        try:
+            return st.secrets.get(key)
+        except (FileNotFoundError, KeyError):
+            return os.getenv(key, "")
+    
+    default_client_id = get_secret_or_env("FIREBOLT_CLIENT_ID")
+    default_client_secret = get_secret_or_env("FIREBOLT_CLIENT_SECRET")
+    default_account = get_secret_or_env("FIREBOLT_ACCOUNT")
+    default_database = get_secret_or_env("FIREBOLT_DATABASE")
+    default_engine = get_secret_or_env("FIREBOLT_ENGINE")
     
     # Show connection status
     st.sidebar.write(f"**Status:** {st.session_state.connection_status}")
@@ -141,31 +154,55 @@ def main():
     # Manual connection form (fallback or override)
     with st.sidebar.expander("🔧 Manual Connection (Optional)", expanded=not bool(default_client_id)):
         with st.form("connection_form"):
-            client_id = st.text_input("Client ID", value=default_client_id, type="password", 
-                                     help="Will use secret if available" if default_client_id else "Enter your Firebolt Client ID")
-            client_secret = st.text_input("Client Secret", value=default_client_secret, type="password",
-                                         help="Will use secret if available" if default_client_secret else "Enter your Firebolt Client Secret")
-            account = st.text_input("Account", value=default_account,
-                                   help="Will use secret if available" if default_account else "Enter your Firebolt Account")
-            database = st.text_input("Database", value=default_database,
-                                    help="Will use secret if available" if default_database else "Enter your Firebolt Database")
-            engine = st.text_input("Engine", value=default_engine,
-                                  help="Will use secret if available" if default_engine else "Enter your Firebolt Engine")
+            # Show masked values if using secrets, empty if manual entry
+            display_client_id = "••••••••••••••••" if default_client_id else ""
+            display_client_secret = "••••••••••••••••" if default_client_secret else ""
+            display_account = "••••••••" if default_account else ""
+            display_database = "••••••••" if default_database else ""
+            display_engine = "••••••••" if default_engine else ""
+            
+            client_id = st.text_input("Client ID", 
+                                     value=display_client_id if default_client_id else "", 
+                                     type="password",
+                                     placeholder="Will use secret if available" if default_client_id else "Enter your Firebolt Client ID")
+            client_secret = st.text_input("Client Secret", 
+                                         value=display_client_secret if default_client_secret else "", 
+                                         type="password",
+                                         placeholder="Will use secret if available" if default_client_secret else "Enter your Firebolt Client Secret")
+            account = st.text_input("Account", 
+                                   value=display_account if default_account else "",
+                                   placeholder="Will use secret if available" if default_account else "Enter your Firebolt Account")
+            database = st.text_input("Database", 
+                                    value=display_database if default_database else "",
+                                    placeholder="Will use secret if available" if default_database else "Enter your Firebolt Database")
+            engine = st.text_input("Engine", 
+                                  value=display_engine if default_engine else "",
+                                  placeholder="Will use secret if available" if default_engine else "Enter your Firebolt Engine")
             
             connect_btn = st.form_submit_button("Connect to Firebolt")
             
-            if connect_btn and all([client_id, client_secret, account, database, engine]):
-                with st.spinner("Connecting to Firebolt..."):
-                    success, message = asyncio.run(setup_firebolt_connection(
-                        client_id, client_secret, account, database, engine
-                    ))
-                    
-                    if success:
-                        st.session_state.connection_status = "Connected ✅"
-                        st.success(message)
-                    else:
-                        st.session_state.connection_status = "Failed ❌"
-                        st.error(message)
+            if connect_btn:
+                # Use actual secret values if form shows masked values, otherwise use form input
+                actual_client_id = default_client_id if (client_id == display_client_id and default_client_id) else client_id
+                actual_client_secret = default_client_secret if (client_secret == display_client_secret and default_client_secret) else client_secret
+                actual_account = default_account if (account == display_account and default_account) else account
+                actual_database = default_database if (database == display_database and default_database) else database
+                actual_engine = default_engine if (engine == display_engine and default_engine) else engine
+                
+                if all([actual_client_id, actual_client_secret, actual_account, actual_database, actual_engine]):
+                    with st.spinner("Connecting to Firebolt..."):
+                        success, message = asyncio.run(setup_firebolt_connection(
+                            actual_client_id, actual_client_secret, actual_account, actual_database, actual_engine
+                        ))
+                        
+                        if success:
+                            st.session_state.connection_status = "Connected ✅"
+                            st.success(message)
+                        else:
+                            st.session_state.connection_status = "Failed ❌"
+                            st.error(message)
+                else:
+                    st.error("Please provide all connection details")
 
     # Main content area
     col1, col2 = st.columns([1, 1])

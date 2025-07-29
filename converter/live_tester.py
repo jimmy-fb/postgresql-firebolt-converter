@@ -162,48 +162,51 @@ class LiveQueryTester:
             
             if is_repeated_error:
                 logger.warning(f"🔄 REPEATED ERROR: This same error occurred in attempts: {previous_attempts}")
-                # For repeated errors, be more explicit
-                prompt = f"""This Firebolt query has the SAME ERROR REPEATING across multiple attempts.
+                # For repeated errors, be more explicit and demanding
+                prompt = f"""🚨 CRITICAL: This Firebolt query has FAILED {len(previous_attempts)} times with the SAME ERROR.
 
-ERROR MESSAGE (REPEATED): {error_message}
-Previous failed attempts with this same error: {previous_attempts}
+⚠️ ERROR MESSAGE (REPEATED): {error_message}
+Previous failed attempts: {previous_attempts}
 Current attempt: {attempt}
 
-FAILING QUERY:
+🔥 FAILING QUERY:
 {query}
 
-⚠️ IMPORTANT: Your previous attempts to fix this error FAILED. Please try a DIFFERENT approach.
+⚠️ IMPORTANT: Your previous {len(previous_attempts)} attempts to fix this error COMPLETELY FAILED. 
+The query above is still causing the exact same error. You MUST try a RADICALLY different approach.
 
-Fix using correct Firebolt syntax:
-- JSON functions: JSONExtract() does NOT exist, use JSON_POINTER_EXTRACT_TEXT(column, '/path')
-- JSON paths: use /path (not $.path)  
-- EXTRACT functions: wrap with CAST AS DATE/TIMESTAMP
-- FILTER clauses: use CASE WHEN instead
-- PostgreSQL casting: use CAST() not ::
-- Missing columns: add proper JOINs or remove references
-- See: https://docs.firebolt.io/reference-sql/functions-reference/json
+🛠️ SPECIFIC FIXES NEEDED:
+- If error mentions "JSONExtract": Replace with JSON_POINTER_EXTRACT_TEXT(column, '/path')
+- If error mentions "extract()": Wrap input with CAST(column AS TIMESTAMP)  
+- If error mentions "FILTER": Convert to CASE WHEN ... THEN ... ELSE 0 END
+- If error mentions "not supported": Find alternative Firebolt function
+- If error mentions missing column: Add proper JOIN or remove reference
+- If error mentions casting: Use CAST(value AS TYPE) not value::TYPE
 
-Since this error is REPEATING, try a completely different approach. 
-Please provide ONLY the corrected Firebolt SQL query:"""
+🎯 YOU MUST CHANGE THE QUERY SIGNIFICANTLY. Don't just return the same query.
+Provide ONLY the corrected Firebolt SQL that will NOT produce this error:"""
             else:
                 logger.info(f"🆕 NEW ERROR: First time seeing this error")
-                # For new errors, use standard prompt
-                prompt = f"""This Firebolt query failed with a specific error. Please fix it.
+                # For new errors, be more specific about the exact issue
+                prompt = f"""🔧 This Firebolt query failed with a specific error. Fix the exact issue.
 
-ERROR MESSAGE: {error_message}
+❌ ERROR MESSAGE: {error_message}
 
-FAILING QUERY:
+🔥 FAILING QUERY:
 {query}
 
-Fix using correct Firebolt syntax:
-- JSON functions: JSONExtract() does NOT exist, use JSON_POINTER_EXTRACT_TEXT(column, '/path')
-- JSON paths: use /path (not $.path)  
-- EXTRACT functions: wrap with CAST AS DATE/TIMESTAMP
-- FILTER clauses: use CASE WHEN instead
-- PostgreSQL casting: use CAST() not ::
-- See: https://docs.firebolt.io/reference-sql/functions-reference/json
+🛠️ ANALYSIS NEEDED:
+Look at the error message above and identify exactly what's wrong with the query.
 
-Please provide ONLY the corrected Firebolt SQL query that fixes this specific error:"""
+🎯 SPECIFIC FIXES:
+- If "JSONExtract": Use JSON_POINTER_EXTRACT_TEXT(column, '/path') instead
+- If "extract()": Wrap with CAST(column AS TIMESTAMP)
+- If "FILTER": Use CASE WHEN instead of FILTER clause
+- If "not supported": Find Firebolt equivalent function
+- If missing column: Check JOINs and table aliases
+- If casting error: Use CAST(value AS TYPE) syntax
+
+✅ Provide ONLY the corrected Firebolt SQL that fixes this specific error:"""
             
             logger.info(f"🔧 Sending {'REPEATED' if is_repeated_error else 'NEW'} error to OpenAI for correction (attempt {attempt})")
             logger.info(f"📤 ERROR + QUERY SENT TO OPENAI:")
@@ -214,10 +217,10 @@ Please provide ONLY the corrected Firebolt SQL query that fixes this specific er
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a Firebolt SQL expert. Fix queries using correct Firebolt syntax. JSONExtract() does not exist - use JSON_POINTER_EXTRACT_TEXT() instead. If an error is repeating, try a completely different approach."},
+                    {"role": "system", "content": "You are a Firebolt SQL expert. When given an error, you MUST modify the query to fix it. Never return the same query unchanged. JSONExtract() does not exist - use JSON_POINTER_EXTRACT_TEXT() instead. Be creative with fixes for repeated errors."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1,
+                temperature=0.3,  # Increase temperature for more varied responses
                 max_tokens=2000
             )
             
