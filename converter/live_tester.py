@@ -290,10 +290,35 @@ When given an error, you MUST:
 📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/functions-reference/date-time#extract
 
 The error says EXTRACT() needs DATE, TIMESTAMP, or TIMESTAMPTZ input.
-- Find the EXTRACT() function in your query
-- The input column needs to be cast to proper date/timestamp type
-- CORRECT FIREBOLT SYNTAX: EXTRACT(date_part FROM CAST(column AS TIMESTAMP))
-- DO NOT use JSON functions for this - this is a date casting issue
+
+🚨 CRITICAL FIX for EXTRACT with SUBQUERIES:
+If your EXTRACT function contains a subquery like:
+❌ EXTRACT(MONTH FROM (SELECT MAX(date_col) FROM table))
+
+✅ CORRECT PATTERN - Pull subquery out as cross join:
+```sql
+FROM main_table,
+(SELECT MAX(date_col) AS max_date FROM table) AS sub
+WHERE EXTRACT(MONTH FROM CAST(main_col AS DATE)) = EXTRACT(MONTH FROM sub.max_date)
+```
+
+WORKING EXAMPLE:
+❌ BAD:
+```sql
+WHERE EXTRACT(MONTH FROM CAST(DS.DATE_OF_DISB AS DATE)) = EXTRACT(MONTH FROM (SELECT MAX(agreementdate::date) from jayam_contract_details))
+```
+
+✅ GOOD:
+```sql
+FROM table1,
+(SELECT MAX(agreementdate::DATE) AS max_agreement_date FROM jayam_contract_details) AS sub
+WHERE EXTRACT(MONTH FROM CAST(DS.DATE_OF_DISB AS DATE)) = EXTRACT(MONTH FROM sub.max_agreement_date)
+```
+
+- Find the EXTRACT() function with subquery in your query
+- Move the subquery to FROM clause as cross join with alias
+- Reference the aliased column instead of inline subquery
+- Ensure all inputs to EXTRACT are properly cast to DATE/TIMESTAMP
 - Example: EXTRACT(YEAR FROM some_column) → EXTRACT(YEAR FROM CAST(some_column AS TIMESTAMP))
 
 🔗 More info: https://docs.firebolt.io/reference-sql/data-types/#date-and-time-data-types"""

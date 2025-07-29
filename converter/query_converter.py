@@ -109,9 +109,23 @@ class PostgreSQLToFireboltConverter:
 
 Fix ALL Firebolt compatibility issues including:
 
-📅 EXTRACT/DATE FUNCTIONS:
+📅 EXTRACT/DATE FUNCTIONS - CRITICAL SUBQUERY FIX:
 - EXTRACT functions: wrap expressions with CAST AS DATE/TIMESTAMP/TIMESTAMPTZ
 - Correct syntax: EXTRACT(part FROM CAST(column AS TIMESTAMP))
+
+🚨 EXTRACT WITH SUBQUERIES - SPECIAL PATTERN:
+❌ WRONG: EXTRACT(MONTH FROM (SELECT MAX(date_col) FROM table))
+✅ CORRECT: Pull subquery out as cross join:
+```sql
+FROM main_table,
+(SELECT MAX(date_col) AS max_date FROM table) AS sub
+WHERE EXTRACT(MONTH FROM CAST(main_col AS DATE)) = EXTRACT(MONTH FROM sub.max_date)
+```
+
+WORKING EXAMPLE:
+- Bad: WHERE EXTRACT(MONTH FROM (SELECT MAX(agreementdate::date) from jayam_contract_details))
+- Good: FROM table, (SELECT MAX(agreementdate::DATE) AS max_date FROM jayam_contract_details) AS sub WHERE EXTRACT(MONTH FROM sub.max_date)
+
 - Reference: https://docs.firebolt.io/reference-sql/functions-reference/date-time#extract
 
 🔢 AGGREGATION:
