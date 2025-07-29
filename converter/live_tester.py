@@ -178,24 +178,36 @@ Current attempt: {attempt}
 ⚠️ IMPORTANT: Your previous {len(previous_attempts)} attempts to fix this error COMPLETELY FAILED. 
 The query above is still causing the exact same error. You MUST try a RADICALLY different approach.
 
+🔗 REFERENCE THE OFFICIAL FIREBOLT DOCUMENTATION:
+- Main SQL Reference: https://docs.firebolt.io/reference-sql/
+- Functions: https://docs.firebolt.io/reference-sql/functions-reference/
+- JSON Functions: https://docs.firebolt.io/reference-sql/functions-reference/json
+- Data Types: https://docs.firebolt.io/reference-sql/data-types/
+
 {specific_guidance}
 
 🎯 YOU MUST CHANGE THE QUERY SIGNIFICANTLY. Don't just return the same query.
+📖 CONSULT FIREBOLT DOCUMENTATION for the correct syntax and function signatures.
 Provide ONLY the corrected Firebolt SQL that will NOT produce this error:"""
             
             else:
                 logger.info(f"🆕 NEW ERROR: First time seeing this error")
                 # For new errors, be more specific about the exact issue
-                prompt = f"""🔧 This Firebolt query failed with a specific error. Fix the exact issue.
+                prompt = f"""🔧 This Firebolt query failed with a specific error. Fix the exact issue using official Firebolt documentation.
 
 ❌ ERROR MESSAGE: {error_message}
 
 🔥 FAILING QUERY:
 {query}
 
+🔗 CONSULT OFFICIAL FIREBOLT DOCUMENTATION:
+- SQL Reference: https://docs.firebolt.io/reference-sql/
+- Functions: https://docs.firebolt.io/reference-sql/functions-reference/
+- Data Types: https://docs.firebolt.io/reference-sql/data-types/
+
 {specific_guidance}
 
-✅ Provide ONLY the corrected Firebolt SQL that fixes this specific error:"""
+✅ Provide ONLY the corrected Firebolt SQL that fixes this specific error using proper Firebolt syntax:"""
             
             logger.info(f"🔧 Sending {'REPEATED' if is_repeated_error else 'NEW'} error to OpenAI for correction (attempt {attempt})")
             logger.info(f"📤 ERROR + QUERY SENT TO OPENAI:")
@@ -206,7 +218,22 @@ Provide ONLY the corrected Firebolt SQL that will NOT produce this error:"""
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a Firebolt SQL expert. When given an error, you MUST modify the query to fix it. Never return the same query unchanged. Analyze the specific error message carefully and make targeted fixes."},
+                    {"role": "system", "content": """You are a Firebolt SQL expert with access to the official Firebolt documentation. 
+
+IMPORTANT: Firebolt uses a PostgreSQL-compliant SQL dialect but has specific function signatures and syntax requirements. When fixing errors, always reference the official Firebolt documentation at https://docs.firebolt.io/
+
+Key Firebolt SQL References:
+- SQL Functions: https://docs.firebolt.io/reference-sql/functions-reference/
+- JSON Functions: https://docs.firebolt.io/reference-sql/functions-reference/json  
+- Data Types: https://docs.firebolt.io/reference-sql/data-types/
+- SQL Commands: https://docs.firebolt.io/reference-sql/sql-commands/
+
+When given an error, you MUST:
+1. Analyze the specific error message carefully
+2. Reference the appropriate Firebolt documentation section
+3. Apply the correct Firebolt syntax/function signatures
+4. Never return the same query unchanged
+5. Make targeted fixes based on official Firebolt documentation"""},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,  # Increase temperature for more varied responses
@@ -260,48 +287,93 @@ Provide ONLY the corrected Firebolt SQL that will NOT produce this error:"""
         
         if "extract()" in error_lower and "date, timestamp, or timestamptz" in error_lower:
             return """🛠️ SPECIFIC FIX FOR EXTRACT ERROR:
+📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/functions-reference/date-time#extract
+
 The error says EXTRACT() needs DATE, TIMESTAMP, or TIMESTAMPTZ input.
 - Find the EXTRACT() function in your query
 - The input column needs to be cast to proper date/timestamp type
-- Use: EXTRACT(YEAR FROM CAST(your_column AS TIMESTAMP))
+- CORRECT FIREBOLT SYNTAX: EXTRACT(date_part FROM CAST(column AS TIMESTAMP))
 - DO NOT use JSON functions for this - this is a date casting issue
-- Example: EXTRACT(YEAR FROM now()) → EXTRACT(YEAR FROM CAST(date_column AS TIMESTAMP))"""
+- Example: EXTRACT(YEAR FROM some_column) → EXTRACT(YEAR FROM CAST(some_column AS TIMESTAMP))
+
+🔗 More info: https://docs.firebolt.io/reference-sql/data-types/#date-and-time-data-types"""
         
         elif "json_pointer_extract_text" in error_lower and "double precision" in error_lower:
             return """🛠️ SPECIFIC FIX FOR JSON FUNCTION ERROR:
+📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/functions-reference/json
+
 You're trying to use JSON_POINTER_EXTRACT_TEXT on a NUMERIC column!
-- JSON_POINTER_EXTRACT_TEXT only works on TEXT columns containing JSON
+- JSON_POINTER_EXTRACT_TEXT only works on TEXT columns containing JSON data
+- FUNCTION SIGNATURE: JSON_POINTER_EXTRACT_TEXT(json_text, json_pointer_path)
 - You have a NUMERIC (double precision) column, not a JSON column
-- REMOVE the JSON_POINTER_EXTRACT_TEXT wrapper entirely
+- SOLUTION: REMOVE the JSON_POINTER_EXTRACT_TEXT wrapper entirely
 - Just use the column directly: column_name (not JSON_POINTER_EXTRACT_TEXT(column_name, '/'))
-- Example: JSON_POINTER_EXTRACT_TEXT(amount, '/') → amount"""
+- Example: JSON_POINTER_EXTRACT_TEXT(amount, '/') → amount
+
+🔗 See all JSON functions: https://docs.firebolt.io/reference-sql/functions-reference/json"""
         
         elif "jsonextract" in error_lower:
             return """🛠️ SPECIFIC FIX FOR JSONExtract ERROR:
-- JSONExtract() does not exist in Firebolt
-- Use JSON_POINTER_EXTRACT_TEXT(column, '/path') for JSON data
+📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/functions-reference/json
+
+- JSONExtract() does NOT exist in Firebolt
+- CORRECT FIREBOLT FUNCTIONS: JSON_EXTRACT_TEXT(), JSON_POINTER_EXTRACT_TEXT(), JSON_EXTRACT()
+- For simple JSON paths: JSON_EXTRACT_TEXT(json_column, '$.path')
+- For JSON pointers: JSON_POINTER_EXTRACT_TEXT(json_column, '/path')
 - But ONLY if the column actually contains JSON text data
-- For regular columns, don't use JSON functions at all"""
+- For regular columns, don't use JSON functions at all
+
+🔗 Complete JSON function reference: https://docs.firebolt.io/reference-sql/functions-reference/json"""
         
         elif "filter" in error_lower and "not supported" in error_lower:
             return """🛠️ SPECIFIC FIX FOR FILTER ERROR:
+📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/functions-reference/aggregation
+
 - FILTER clause is not supported in Firebolt
-- Convert: SUM(amount) FILTER (WHERE condition)
-- To: SUM(CASE WHEN condition THEN amount ELSE 0 END)"""
+- CONVERT: SUM(amount) FILTER (WHERE condition)
+- TO: SUM(CASE WHEN condition THEN amount ELSE 0 END)
+- This applies to all aggregate functions: COUNT, AVG, MAX, MIN, etc.
+
+🔗 See aggregate functions: https://docs.firebolt.io/reference-sql/functions-reference/aggregation"""
         
         elif "function signature" in error_lower and "not found" in error_lower:
             return """🛠️ SPECIFIC FIX FOR FUNCTION SIGNATURE ERROR:
+📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/functions-reference/
+
 - You're using a function with wrong parameter types
-- Check the function documentation for correct parameter types
-- Make sure you're not mixing JSON functions with numeric columns
-- Cast parameters to the correct type if needed"""
+- CHECK OFFICIAL FIREBOLT FUNCTION SIGNATURES in the documentation
+- Make sure parameter types match exactly what Firebolt expects
+- Don't mix JSON functions with numeric columns
+- Cast parameters to the correct type if needed: CAST(value AS TEXT)
+
+🔗 All function signatures: https://docs.firebolt.io/reference-sql/functions-reference/"""
+
+        elif "alter table" in error_lower and "rename" in error_lower:
+            return """🛠️ SPECIFIC FIX FOR ALTER TABLE RENAME ERROR:
+📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/sql-commands/ddl-commands#alter-table
+
+- Firebolt has specific syntax for ALTER TABLE operations
+- CORRECT SYNTAX: ALTER TABLE table_name RENAME COLUMN old_name TO new_name
+- You cannot rename columns that don't exist
+- Consider using column aliases in SELECT instead: column_name AS new_alias
+
+🔗 DDL Commands: https://docs.firebolt.io/reference-sql/sql-commands/ddl-commands"""
         
         else:
-            return """🛠️ GENERAL TROUBLESHOOTING:
+            return """🛠️ GENERAL TROUBLESHOOTING WITH FIREBOLT DOCUMENTATION:
+📖 MAIN REFERENCE: https://docs.firebolt.io/reference-sql/
+
 - Read the error message carefully and fix the exact issue mentioned
+- Consult the official Firebolt SQL reference for correct syntax
+- Firebolt uses PostgreSQL-compliant SQL but has specific requirements
 - Don't apply generic fixes that don't match the specific error
 - Test your understanding: what is the error actually saying?
-- Make targeted changes, don't change unrelated parts of the query"""
+- Make targeted changes based on Firebolt documentation
+
+🔗 Key References:
+- Functions: https://docs.firebolt.io/reference-sql/functions-reference/
+- Data Types: https://docs.firebolt.io/reference-sql/data-types/
+- SQL Commands: https://docs.firebolt.io/reference-sql/sql-commands/"""
 
     def _clean_sql_response(self, response: str) -> str:
         """Clean up OpenAI response by removing markdown formatting and extra whitespace"""

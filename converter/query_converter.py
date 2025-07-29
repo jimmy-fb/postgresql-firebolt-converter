@@ -96,37 +96,74 @@ class PostgreSQLToFireboltConverter:
         try:
             import openai
             
-            # Simple, direct prompt - let OpenAI handle everything
-            prompt = f"""Convert this PostgreSQL query to be fully Firebolt compliant.
+            # Enhanced prompt with Firebolt documentation references
+            prompt = f"""Convert this PostgreSQL query to be fully Firebolt compliant using the official Firebolt documentation.
+
+🔗 REFERENCE THE OFFICIAL FIREBOLT DOCUMENTATION:
+- Main SQL Reference: https://docs.firebolt.io/reference-sql/
+- Functions: https://docs.firebolt.io/reference-sql/functions-reference/
+- JSON Functions: https://docs.firebolt.io/reference-sql/functions-reference/json
+- Date/Time Functions: https://docs.firebolt.io/reference-sql/functions-reference/date-time
+- Data Types: https://docs.firebolt.io/reference-sql/data-types/
+- Aggregation Functions: https://docs.firebolt.io/reference-sql/functions-reference/aggregation
 
 Fix ALL Firebolt compatibility issues including:
-- EXTRACT functions (wrap expressions with CAST AS DATE/TIMESTAMP)  
-- FILTER clauses (convert to CASE WHEN)
-- PostgreSQL casting (:: to CAST())
-- JSON operations - IMPORTANT: Use Firebolt JSON functions:
-  * JSONExtract() does NOT exist in Firebolt
-  * Use JSON_POINTER_EXTRACT_TEXT(json_column, '/path') for extracting JSON values
-  * Use JSON_VALUE(JSON_POINTER_EXTRACT(json_column, '/path')) for complex extraction
-  * JSON paths use / syntax (not $ syntax): '/key' not '$.key'
-  * Replace PostgreSQL -> and ->> with Firebolt JSON functions
-  * See: https://docs.firebolt.io/reference-sql/functions-reference/json
-- Date/time functions
-- Subquery syntax
-- Any other Firebolt requirements
+
+📅 EXTRACT/DATE FUNCTIONS:
+- EXTRACT functions: wrap expressions with CAST AS DATE/TIMESTAMP/TIMESTAMPTZ
+- Correct syntax: EXTRACT(part FROM CAST(column AS TIMESTAMP))
+- Reference: https://docs.firebolt.io/reference-sql/functions-reference/date-time#extract
+
+🔢 AGGREGATION:
+- FILTER clauses (PostgreSQL) → CASE WHEN (Firebolt)
+- Convert: SUM(x) FILTER (WHERE y) → SUM(CASE WHEN y THEN x ELSE 0 END)
+- Reference: https://docs.firebolt.io/reference-sql/functions-reference/aggregation
+
+🏷️ CASTING:
+- PostgreSQL casting (::) → Firebolt CAST() function
+- Convert: column::type → CAST(column AS type)
+
+📋 JSON OPERATIONS - CRITICAL:
+- JSONExtract() does NOT exist in Firebolt
+- Use JSON_POINTER_EXTRACT_TEXT(json_column, '/path') for simple text extraction
+- Use JSON_EXTRACT_TEXT(json_column, '$.path') for $.path syntax
+- JSON pointer paths use / syntax: '/key' not '$.key'
+- Replace PostgreSQL -> and ->> with proper Firebolt JSON functions
+- Reference: https://docs.firebolt.io/reference-sql/functions-reference/json
+
+⏰ TIMESTAMP FUNCTIONS:
+- now() → CURRENT_TIMESTAMP or NOW()
+- Proper timezone handling with AT TIME ZONE
+
+🔍 SUBQUERIES:
+- Check for Firebolt subquery limitations and refactor if needed
 
 PostgreSQL Query:
 {sql}
 
-Return ONLY the corrected Firebolt SQL:"""
+Return ONLY the corrected Firebolt SQL query that follows official Firebolt syntax:"""
             
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a Firebolt SQL expert. Convert PostgreSQL queries to be fully Firebolt compliant. Return only the corrected SQL."},
+                    {
+                        "role": "system", 
+                        "content": """You are a SQL expert specializing in converting PostgreSQL queries to Firebolt SQL.
+
+IMPORTANT: Always reference the official Firebolt documentation at https://docs.firebolt.io/ for accurate syntax and function signatures.
+
+Key References:
+- SQL Functions: https://docs.firebolt.io/reference-sql/functions-reference/
+- JSON Functions: https://docs.firebolt.io/reference-sql/functions-reference/json
+- Date/Time Functions: https://docs.firebolt.io/reference-sql/functions-reference/date-time
+- Data Types: https://docs.firebolt.io/reference-sql/data-types/
+
+Firebolt uses a PostgreSQL-compliant SQL dialect but has specific function signatures and requirements. Always provide syntactically correct Firebolt SQL based on the official documentation."""
+                    },
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=4000,
-                temperature=0.1
+                temperature=0.2,
+                max_tokens=2000
             )
             
             converted = response.choices[0].message.content.strip()
