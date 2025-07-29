@@ -112,29 +112,60 @@ def main():
     # Sidebar for Firebolt connection
     st.sidebar.header("🔗 Firebolt Connection")
     
-    with st.sidebar.form("connection_form"):
-        client_id = st.text_input("Client ID", type="password")
-        client_secret = st.text_input("Client Secret", type="password")
-        account = st.text_input("Account")
-        database = st.text_input("Database")
-        engine = st.text_input("Engine")
-        
-        connect_btn = st.form_submit_button("Connect to Firebolt")
-        
-        if connect_btn and all([client_id, client_secret, account, database, engine]):
-            with st.spinner("Connecting to Firebolt..."):
+    # Try to get credentials from secrets first
+    default_client_id = st.secrets.get("FIREBOLT_CLIENT_ID", "")
+    default_client_secret = st.secrets.get("FIREBOLT_CLIENT_SECRET", "")
+    default_account = st.secrets.get("FIREBOLT_ACCOUNT", "")
+    default_database = st.secrets.get("FIREBOLT_DATABASE", "")
+    default_engine = st.secrets.get("FIREBOLT_ENGINE", "")
+    
+    # Show connection status
+    st.sidebar.write(f"**Status:** {st.session_state.connection_status}")
+    
+    # If we have all secrets, auto-connect
+    if all([default_client_id, default_client_secret, default_account, default_database, default_engine]) and st.session_state.connection_status == "Not Connected":
+        with st.sidebar:
+            st.info("🔐 Using credentials from secrets...")
+            with st.spinner("Auto-connecting to Firebolt..."):
                 success, message = asyncio.run(setup_firebolt_connection(
-                    client_id, client_secret, account, database, engine
+                    default_client_id, default_client_secret, default_account, default_database, default_engine
                 ))
                 
                 if success:
                     st.session_state.connection_status = "Connected ✅"
-                    st.success(message)
+                    st.success("Auto-connected successfully!")
                 else:
                     st.session_state.connection_status = "Failed ❌"
-                    st.error(message)
+                    st.error(f"Auto-connection failed: {message}")
     
-    st.sidebar.write(f"**Status:** {st.session_state.connection_status}")
+    # Manual connection form (fallback or override)
+    with st.sidebar.expander("🔧 Manual Connection (Optional)", expanded=not bool(default_client_id)):
+        with st.form("connection_form"):
+            client_id = st.text_input("Client ID", value=default_client_id, type="password", 
+                                     help="Will use secret if available" if default_client_id else "Enter your Firebolt Client ID")
+            client_secret = st.text_input("Client Secret", value=default_client_secret, type="password",
+                                         help="Will use secret if available" if default_client_secret else "Enter your Firebolt Client Secret")
+            account = st.text_input("Account", value=default_account,
+                                   help="Will use secret if available" if default_account else "Enter your Firebolt Account")
+            database = st.text_input("Database", value=default_database,
+                                    help="Will use secret if available" if default_database else "Enter your Firebolt Database")
+            engine = st.text_input("Engine", value=default_engine,
+                                  help="Will use secret if available" if default_engine else "Enter your Firebolt Engine")
+            
+            connect_btn = st.form_submit_button("Connect to Firebolt")
+            
+            if connect_btn and all([client_id, client_secret, account, database, engine]):
+                with st.spinner("Connecting to Firebolt..."):
+                    success, message = asyncio.run(setup_firebolt_connection(
+                        client_id, client_secret, account, database, engine
+                    ))
+                    
+                    if success:
+                        st.session_state.connection_status = "Connected ✅"
+                        st.success(message)
+                    else:
+                        st.session_state.connection_status = "Failed ❌"
+                        st.error(message)
 
     # Main content area
     col1, col2 = st.columns([1, 1])
