@@ -229,6 +229,12 @@ order by sa.applicationid"""
     with col2:
         st.header("🎯 Firebolt Query")
         
+        # Determine what query to show
+        display_query = ""
+        if 'final_working_query' in st.session_state:
+            display_query = st.session_state.final_working_query
+            st.info("✅ This is the **tested and working** Firebolt query from live testing!")
+        
         # Convert button
         if st.button("🔄 Convert Query", type="primary"):
             if postgresql_query.strip():
@@ -237,20 +243,49 @@ order by sa.applicationid"""
                         result = st.session_state.query_converter.convert(postgresql_query)
                         converted_sql = result.get('converted_sql', 'Conversion failed')
                         
-                        st.text_area(
-                            "Converted Firebolt Query:",
-                            value=converted_sql,
-                            height=300,
-                            key="converted_query"
-                        )
+                        # Update the display query
+                        display_query = converted_sql
                         
-                        # Store in session state for testing
-                        st.session_state.last_converted = converted_sql
+                        # Clear any previous final working query since this is a new conversion
+                        if 'final_working_query' in st.session_state:
+                            del st.session_state.final_working_query
                         
                     except Exception as e:
                         st.error(f"Conversion failed: {str(e)}")
+                        display_query = f"Conversion failed: {str(e)}"
             else:
                 st.warning("Please enter a PostgreSQL query to convert.")
+        
+        # Display the query in a text area
+        st.text_area(
+            "Converted/Working Firebolt Query:",
+            value=display_query,
+            height=300,
+            key="firebolt_query_display",
+            help="This shows either the converted query or the final working query after live testing"
+        )
+        
+        # Add copy button and additional info for working queries
+        if 'final_working_query' in st.session_state:
+            col_copy, col_info = st.columns([1, 2])
+            
+            with col_copy:
+                if st.button("📋 Copy Working Query", type="secondary"):
+                    st.code(st.session_state.final_working_query, language='sql')
+                    
+            with col_info:
+                if 'test_result' in st.session_state:
+                    result = st.session_state.test_result
+                    total_attempts = result.get('total_attempts', 'Unknown')
+                    st.caption(f"✅ Tested successfully in {total_attempts} attempt(s)")
+                    
+                    # Show row count if available
+                    if result.get('final_result') and 'row_count' in result.get('final_result', {}):
+                        row_count = result['final_result']['row_count']
+                        st.caption(f"📊 Query returned {row_count:,} rows")
+        
+        elif display_query and display_query != "":
+            st.caption("💡 Use 'Test & Auto-Fix Query' below to verify this query works on your Firebolt database")
 
     # Live Testing Section
     st.header("🧪 Live Testing & Auto-Correction")
@@ -263,6 +298,39 @@ order by sa.applicationid"""
                 if postgresql_query.strip():
                     with st.spinner("Testing query and auto-correcting errors..."):
                         try:
+                            # Check if credentials are available and auto-fix if needed
+                            client = st.session_state.live_tester.firebolt_client
+                            
+                            if not all([client.client_id, client.client_secret, client.account, client.database]):
+                                st.warning("🔧 Credentials missing, attempting to restore...")
+                                
+                                def get_secret_or_env(key):
+                                    try:
+                                        return st.secrets.get(key)
+                                    except (FileNotFoundError, KeyError):
+                                        return os.getenv(key, "")
+                                
+                                fix_client_id = get_secret_or_env("FIREBOLT_CLIENT_ID")
+                                fix_client_secret = get_secret_or_env("FIREBOLT_CLIENT_SECRET")
+                                fix_account = get_secret_or_env("FIREBOLT_ACCOUNT")
+                                fix_database = get_secret_or_env("FIREBOLT_DATABASE")
+                                fix_engine = get_secret_or_env("FIREBOLT_ENGINE")
+                                
+                                if all([fix_client_id, fix_client_secret, fix_account, fix_database]):
+                                    success = asyncio.run(client.connect(
+                                        client_id=fix_client_id,
+                                        client_secret=fix_client_secret,
+                                        account=fix_account,
+                                        database=fix_database,
+                                        engine=fix_engine
+                                    ))
+                                    if not success:
+                                        st.error("❌ Could not reconnect with restored credentials.")
+                                        st.stop()
+                                else:
+                                    st.error("❌ No backup credentials found in secrets or environment.")
+                                    st.stop()
+                            
                             # Run the live testing
                             result = asyncio.run(
                                 st.session_state.live_tester.test_and_fix_query(
@@ -273,8 +341,16 @@ order by sa.applicationid"""
                             
                             st.session_state.test_result = result
                             
+                            # If testing was successful, update the Firebolt query display
+                            if result.get('success') and result.get('final_query'):
+                                st.session_state.final_working_query = result.get('final_query')
+                                st.success("✅ Query tested successfully! The working Firebolt query has been updated below.")
+                                st.rerun()  # Refresh to show the updated query
+                            
                         except Exception as e:
                             st.error(f"Testing failed: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
                 else:
                     st.warning("Please enter a PostgreSQL query to test.")
         
