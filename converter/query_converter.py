@@ -123,12 +123,20 @@ Fix ALL Firebolt compatibility issues including:
 - PostgreSQL casting (::) → Firebolt CAST() function
 - Convert: column::type → CAST(column AS type)
 
-📋 JSON OPERATIONS - CRITICAL:
-- JSONExtract() does NOT exist in Firebolt
-- Use JSON_POINTER_EXTRACT_TEXT(json_column, '/path') for simple text extraction
-- Use JSON_EXTRACT_TEXT(json_column, '$.path') for $.path syntax
-- JSON pointer paths use / syntax: '/key' not '$.key'
-- Replace PostgreSQL -> and ->> with proper Firebolt JSON functions
+📋 JSON OPERATIONS - CRITICAL (Use EXACT syntax):
+❌ WRONG: JSON_EXTRACT_TEXT(), JSON_EXTRACT_STRING(), JSONExtract()
+✅ CORRECT: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(column, '/path'))
+
+EXACT CONVERSION PATTERN:
+- PostgreSQL: object_data::json->>'key'
+- Firebolt: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(object_data, '/key'))
+
+WORKING EXAMPLE:
+- PostgreSQL: object_data::json->>'IMD'
+- Firebolt: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(object_data, '/IMD'))
+
+NEVER use: JSON_EXTRACT_TEXT, JSON_EXTRACT_STRING, JSONExtract
+ALWAYS use: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(column, '/path'))
 - Reference: https://docs.firebolt.io/reference-sql/functions-reference/json
 
 ⏰ TIMESTAMP FUNCTIONS:
@@ -151,6 +159,13 @@ Return ONLY the corrected Firebolt SQL query that follows official Firebolt synt
                         "content": """You are a SQL expert specializing in converting PostgreSQL queries to Firebolt SQL.
 
 IMPORTANT: Always reference the official Firebolt documentation at https://docs.firebolt.io/ for accurate syntax and function signatures.
+
+🚨 CRITICAL JSON CONVERSION RULE:
+PostgreSQL: object_data::json->>'key'
+Firebolt: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(object_data, '/key'))
+
+❌ NEVER use these (they don't exist): JSON_EXTRACT_TEXT, JSON_EXTRACT_STRING, JSONExtract
+✅ ALWAYS use: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(column, '/path'))
 
 Key References:
 - SQL Functions: https://docs.firebolt.io/reference-sql/functions-reference/

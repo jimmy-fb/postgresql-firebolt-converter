@@ -312,18 +312,52 @@ You're trying to use JSON_POINTER_EXTRACT_TEXT on a NUMERIC column!
 
 🔗 See all JSON functions: https://docs.firebolt.io/reference-sql/functions-reference/json"""
         
-        elif "jsonextract" in error_lower:
-            return """🛠️ SPECIFIC FIX FOR JSONExtract ERROR:
+        elif "jsonextract" in error_lower or "json_extract" in error_lower:
+            return """🛠️ SPECIFIC FIX FOR JSON FUNCTION ERROR:
 📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/functions-reference/json
 
-- JSONExtract() does NOT exist in Firebolt
-- CORRECT FIREBOLT FUNCTIONS: JSON_EXTRACT_TEXT(), JSON_POINTER_EXTRACT_TEXT(), JSON_EXTRACT()
-- For simple JSON paths: JSON_EXTRACT_TEXT(json_column, '$.path')
-- For JSON pointers: JSON_POINTER_EXTRACT_TEXT(json_column, '/path')
-- But ONLY if the column actually contains JSON text data
-- For regular columns, don't use JSON functions at all
+CORRECT FIREBOLT JSON SYNTAX - Use this EXACT pattern:
+- PostgreSQL: object_data::json->>'key' 
+- FIREBOLT: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(object_data, '/key'))
+
+❌ WRONG: JSON_EXTRACT_TEXT(), JSON_EXTRACT_STRING(), JSONExtract()
+✅ CORRECT: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(column, '/path'))
+
+WORKING EXAMPLE:
+- PostgreSQL: object_data::json->>'IMD'
+- Firebolt: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(object_data, '/IMD'))
 
 🔗 Complete JSON function reference: https://docs.firebolt.io/reference-sql/functions-reference/json"""
+        
+        elif "json_extract_text" in error_lower or "json_extract_string" in error_lower or "function" in error_lower and "not found" in error_lower:
+            return """🛠️ SPECIFIC FIX FOR INCORRECT JSON FUNCTION:
+📖 FIREBOLT DOCUMENTATION REFERENCE: https://docs.firebolt.io/reference-sql/functions-reference/json
+
+STOP GUESSING FUNCTION NAMES! Use this EXACT Firebolt syntax:
+
+❌ WRONG functions that DON'T exist:
+- JSON_EXTRACT_TEXT()
+- JSON_EXTRACT_STRING() 
+- JSON_EXTRACT()
+- JSONExtract()
+
+✅ CORRECT Firebolt syntax:
+JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(column, '/path'))
+
+EXACT CONVERSION:
+- PostgreSQL: object_data::json->>'IMD'
+- Firebolt: JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(object_data, '/IMD'))
+
+COMPLETE WORKING EXAMPLE:
+```sql
+-- PostgreSQL
+object_data::json->>'LOAN_AMOUNT')::decimal
+
+-- Firebolt  
+JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(object_data, '/LOAN_AMOUNT'))::DECIMAL
+```
+
+🔗 See JSON functions: https://docs.firebolt.io/reference-sql/functions-reference/json"""
         
         elif "filter" in error_lower and "not supported" in error_lower:
             return """🛠️ SPECIFIC FIX FOR FILTER ERROR:
