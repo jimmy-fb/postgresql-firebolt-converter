@@ -216,6 +216,23 @@ python comparison_test.py
 python web_comparison.py
 ```
 
+### CLI Usage
+
+Convert from file to stdout (rule-based only):
+```bash
+python cli.py convert -i input.sql
+```
+
+Convert from stdin to file with AI polish and key override:
+```bash
+cat input.sql | python cli.py convert --enable-ai-polish --openai-key sk-... -o output.sql
+```
+
+Show method, warnings, and explanations:
+```bash
+python cli.py convert -i input.sql --print-method --print-warnings --print-explanations
+```
+
 ## 🤝 Contributing
 
 1. Fork the repository
