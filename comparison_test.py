@@ -92,7 +92,7 @@ class ComparisonTester:
             
             # Convert using our tool
             result = self.converter.convert(test_case['postgresql_query'])
-            converted = result['converted_query']
+            converted = result.get('converted_sql', '')
             
             print("\n🔄 Converter Output:")
             print(converted)

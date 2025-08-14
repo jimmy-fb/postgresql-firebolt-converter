@@ -4,6 +4,10 @@ import json
 import os
 from typing import Dict, Any
 import logging
+from dotenv import load_dotenv
+
+# Load environment variables from .env by default
+load_dotenv()
 
 # Configure logging for Streamlit
 logging.basicConfig(level=logging.INFO)
@@ -59,21 +63,22 @@ if 'live_tester' not in st.session_state:
     st.session_state.live_tester = None
 if 'connection_status' not in st.session_state:
     st.session_state.connection_status = "Not Connected"
+if 'ai_polish_enabled' not in st.session_state:
+    st.session_state.ai_polish_enabled = False
+if 'openai_key' not in st.session_state:
+    # Default to .env OPENAI_API_KEY if present
+    st.session_state.openai_key = os.getenv("OPENAI_API_KEY")
+if 'ai_autocorrect_enabled' not in st.session_state:
+    st.session_state.ai_autocorrect_enabled = False
 
 def create_components():
     """Initialize the converter components"""
-    # Try to get OpenAI API key from secrets first, then environment
+    # Try to get OpenAI API key from secrets first, then environment, then session state
     openai_api_key = None
     try:
         openai_api_key = st.secrets.get("OPENAI_API_KEY")
     except (FileNotFoundError, KeyError):
-        # Secrets file doesn't exist or key not found, try environment
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-    
-    if not openai_api_key:
-        st.error("⚠️ OpenAI API key not found. Please add it to Streamlit secrets or environment variables.")
-        st.info("💡 For local development, set: `export OPENAI_API_KEY='your_key_here'`")
-        return False
+        openai_api_key = os.getenv("OPENAI_API_KEY") or st.session_state.openai_key
     
     try:
         # Initialize components
@@ -112,7 +117,27 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Initialize components
+    # AI Settings section in sidebar
+    st.sidebar.header("🤖 AI Settings (Optional)")
+    with st.sidebar.expander("OpenAI Options", expanded=False):
+        if os.getenv("OPENAI_API_KEY") and not st.session_state.openai_key:
+            st.caption("Using OPENAI_API_KEY from .env by default")
+        input_key = st.text_input("OpenAI API Key", value="", type="password", placeholder="Using .env OPENAI_API_KEY by default; enter here to overwrite")
+        enable_ai_polish = st.checkbox("Enable OpenAI polish for conversion", value=st.session_state.ai_polish_enabled)
+        enable_ai_autocorrect = st.checkbox("Enable OpenAI for auto-correction (live testing)", value=st.session_state.ai_autocorrect_enabled)
+        if st.button("Save AI Settings"):
+            st.session_state.openai_key = input_key.strip() or None
+            st.session_state.ai_polish_enabled = bool(enable_ai_polish)
+            st.session_state.ai_autocorrect_enabled = bool(enable_ai_autocorrect)
+            # Propagate to environment for converter to read
+            os.environ['ENABLE_AI_POLISH'] = 'true' if st.session_state.ai_polish_enabled else 'false'
+            if st.session_state.openai_key:
+                os.environ['OPENAI_API_KEY'] = st.session_state.openai_key
+            # Recreate components so new key is used
+            create_components()
+            st.success("AI settings saved")
+
+    # Initialize components (does not require OpenAI key)
     if not create_components():
         st.stop()
 
@@ -240,6 +265,8 @@ order by sa.applicationid"""
             if postgresql_query.strip():
                 with st.spinner("Converting query..."):
                     try:
+                        # Ensure env flag is set from session state for this run
+                        os.environ['ENABLE_AI_POLISH'] = 'true' if st.session_state.ai_polish_enabled else 'false'
                         result = st.session_state.query_converter.convert(postgresql_query)
                         converted_sql = result.get('converted_sql', 'Conversion failed')
                         
@@ -250,6 +277,20 @@ order by sa.applicationid"""
                         if 'final_working_query' in st.session_state:
                             del st.session_state.final_working_query
                         
+                        # Show warnings/explanations if available
+                        warnings = result.get('warnings', [])
+                        explanations = result.get('explanations', [])
+                        method_used = result.get('method_used', 'unknown')
+                        if method_used:
+                            st.caption(f"Method used: {method_used}")
+                        if warnings:
+                            with st.expander("⚠️ Warnings", expanded=False):
+                                for w in warnings:
+                                    st.warning(w)
+                        if explanations:
+                            with st.expander("✅ Conversions Applied", expanded=False):
+                                for ex in explanations:
+                                    st.write(f"- {ex}")
                     except Exception as e:
                         st.error(f"Conversion failed: {str(e)}")
                         display_query = f"Conversion failed: {str(e)}"
@@ -331,6 +372,23 @@ order by sa.applicationid"""
                                     st.error("❌ No backup credentials found in secrets or environment.")
                                     st.stop()
                             
+                            # Update OpenAI key for live tester if user provided one
+                            if st.session_state.ai_autocorrect_enabled and st.session_state.openai_key:
+                                os.environ['OPENAI_API_KEY'] = st.session_state.openai_key
+                                # Recreate with latest key
+                                st.session_state.live_tester = LiveQueryTester(
+                                    firebolt_client=st.session_state.firebolt_client,
+                                    query_converter=st.session_state.query_converter,
+                                    openai_api_key=st.session_state.openai_key
+                                )
+                            elif not st.session_state.ai_autocorrect_enabled:
+                                # Create tester without OpenAI
+                                st.session_state.live_tester = LiveQueryTester(
+                                    firebolt_client=st.session_state.firebolt_client,
+                                    query_converter=st.session_state.query_converter,
+                                    openai_api_key=None
+                                )
+
                             # Run the live testing
                             result = asyncio.run(
                                 st.session_state.live_tester.test_and_fix_query(

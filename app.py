@@ -320,7 +320,7 @@ def compare_queries():
         
         # Convert using our tool
         result = query_converter.convert(postgresql_query)
-        converter_output = result['converted_query']
+        converter_output = result.get('converted_sql', '')
         
         # Compare queries
         exact_match = converter_output.strip().lower() == manual_firebolt.strip().lower()

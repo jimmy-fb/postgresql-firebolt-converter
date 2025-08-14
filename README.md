@@ -95,6 +95,23 @@ FIREBOLT_DATABASE=your_database
 FIREBOLT_ENGINE=your_engine
 ```
 
+### Streamlit AI Options
+
+- The app will load `.env` automatically (via `python-dotenv`).
+- By default, `OPENAI_API_KEY` from `.env` is used if present.
+- You can overwrite the key in the Streamlit sidebar under “AI Settings → OpenAI Options”.
+- Toggles in the sidebar:
+  - Enable OpenAI polish for conversion (applies AI after deterministic rule-based conversion)
+  - Enable OpenAI for auto-correction during live testing
+
+### Rule-based Improvements
+
+Core deterministic conversions run even without an OpenAI key:
+- Hoist scalar subqueries inside `EXTRACT(...)` into derived subqueries in the `FROM` clause
+- Convert PostgreSQL JSON operators (`->`, `->>`, `#>`, `#>>`) to Firebolt `JSON_VALUE(JSON_POINTER_EXTRACT_TEXT(...))`
+- Convert aggregate `FILTER (WHERE ...)` to `CASE WHEN`
+- Normalize casting and data types
+
 ### Firebolt Connection
 
 The tool supports two ways to connect to Firebolt:

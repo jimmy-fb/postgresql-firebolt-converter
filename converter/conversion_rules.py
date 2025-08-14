@@ -21,11 +21,11 @@ class ConversionRules:
             
             # Pattern: column#>'{key1,key2}' -> JSON path array
             (re.compile(r"(\w+(?:\.\w+)?)\s*#>>\s*'\{([^}]+)\}'"),
-             lambda m: f"JSON_VALUE(JSON_POINTER_EXTRACT_TEXT({m.group(1)}, '/{m.group(2).replace(',', '/')}''))"),
+             lambda m: f"JSON_VALUE(JSON_POINTER_EXTRACT_TEXT({m.group(1)}, '/{m.group(2).replace(',', '/')}'))"),
               
             # Pattern: column#>'{key1,key2}' -> JSON path array
             (re.compile(r"(\w+(?:\.\w+)?)\s*#>\s*'\{([^}]+)\}'"),
-             lambda m: f"JSON_VALUE(JSON_POINTER_EXTRACT_TEXT({m.group(1)}, '/{m.group(2).replace(',', '/')}''))"),
+             lambda m: f"JSON_VALUE(JSON_POINTER_EXTRACT_TEXT({m.group(1)}, '/{m.group(2).replace(',', '/')}'))"),
             
             # Fix any existing invalid syntax patterns (only if they already exist)
             (re.compile(r"(\w+)::JSON_EXTRACT\(json,\s*'\$\.([^']+)'\)"),
@@ -43,9 +43,7 @@ class ConversionRules:
             (re.compile(r"CAST\(\s*(JSON_VALUE\([^)]+\))\s*\)", re.IGNORECASE),
              lambda m: f"{m.group(1)}"),
              
-            # Clean up extra parentheses around simple expressions
-            (re.compile(r"\((\w+::\w+)\)", re.IGNORECASE),
-             lambda m: f"{m.group(1)}"),
+            # Avoid removing parentheses around casts inside function calls (kept disabled)
              
             # Clean up mixed syntax: CAST(expr)::TYPE -> expr::TYPE
             (re.compile(r"CAST\(\s*([^)]+)\s*\)::([\w_]+)", re.IGNORECASE),

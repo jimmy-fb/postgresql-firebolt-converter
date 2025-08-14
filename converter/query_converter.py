@@ -1,8 +1,6 @@
 import re
 import json
-import sqlparse
 from typing import Dict, List, Tuple, Optional
-import openai
 import os
 import asyncio
 from .conversion_rules import ConversionRules
@@ -27,11 +25,11 @@ class PostgreSQLToFireboltConverter:
         
         if self.openai_api_key:
             try:
-                import openai
+                import openai  # type: ignore
                 openai.api_key = self.openai_api_key
                 self.openai_available = True
-            except ImportError:
-                print("OpenAI package not installed. AI features will be disabled.")
+            except Exception:
+                print("OpenAI package not available. AI features will be disabled.")
                 self.openai_available = False
         else:
             self.openai_available = False
@@ -58,44 +56,45 @@ class PostgreSQLToFireboltConverter:
                 self.use_mcp = False
 
     def convert(self, postgresql_query: str) -> dict:
-        """Convert PostgreSQL query to Firebolt SQL - OpenAI ONLY"""
-        
-        # Clean up the query
+        """Convert PostgreSQL query to Firebolt SQL using rule-based conversions first.
+
+        Optionally polish with AI if explicitly enabled and available.
+        """
         cleaned_query = postgresql_query.strip()
-        warnings = []
-        explanation_parts = []
-        
-        # ONLY try AI conversion - no fallback
-        try:
-            converted_sql = self._apply_ai_conversion(cleaned_query)
-            explanation_parts.append("Used AI-powered conversion with OpenAI")
-            
-            return {
-                'converted_sql': converted_sql,
-                'warnings': warnings,
-                'explanations': explanation_parts,
-                'method_used': 'ai_powered'
-            }
-            
-        except Exception as e:
-            print(f"AI conversion failed: {str(e)}")
-            
-            # NO FALLBACK - OpenAI only approach
-            error_msg = f"Conversion failed: {str(e)}. Please ensure OPENAI_API_KEY is set."
-            warnings.append(error_msg)
-            
-            return {
-                'converted_sql': cleaned_query,  # Return original
-                'warnings': warnings,
-                'explanations': ["❌ AI conversion failed - no fallback used"],
-                'method_used': 'failed'
-            }
+        warnings: List[str] = []
+        explanations: List[str] = []
+
+        # 1) Apply deterministic, rule-based conversions
+        converted_sql = self._apply_rule_based_conversion(cleaned_query, explanations, warnings)
+
+        # 2) Optionally apply AI polish if requested via env flag
+        use_ai_polish = os.getenv('ENABLE_AI_POLISH', 'false').lower() in ('1', 'true', 'yes')
+        if use_ai_polish and self.openai_available:
+            try:
+                ai_sql = self._apply_ai_conversion(converted_sql)
+                if ai_sql and isinstance(ai_sql, str):
+                    converted_sql = ai_sql
+                    explanations.append("Applied optional AI polish using OpenAI")
+                    method_used = 'rule_based+ai'
+                else:
+                    method_used = 'rule_based'
+            except Exception as e:
+                warnings.append(f"AI polish skipped due to error: {str(e)}")
+                method_used = 'rule_based'
+        else:
+            method_used = 'rule_based'
+
+        return {
+            'converted_sql': converted_sql,
+            'warnings': warnings,
+            'explanations': explanations,
+            'method_used': method_used
+        }
 
     def _apply_ai_conversion(self, sql: str) -> str:
         """Apply AI-powered conversion using OpenAI - Simple and Direct"""
         try:
-            import openai
-            
+            import openai  # type: ignore
             # Enhanced prompt with Firebolt documentation references
             prompt = f"""Convert this PostgreSQL query to be fully Firebolt compliant using the official Firebolt documentation.
 
@@ -206,14 +205,129 @@ Firebolt uses a PostgreSQL-compliant SQL dialect but has specific function signa
                 converted = converted[:-3]
                 
             return converted.strip()
-            
         except Exception as e:
             raise Exception(f"OpenAI conversion error: {str(e)}")
 
-    def _apply_rule_based_conversion(self, sql: str) -> str:
-        """REMOVED - OpenAI-only approach"""
-        # logger.warning("⚠️ Rule-based conversion disabled - OpenAI only") # This line was removed from the new_code
+    def _apply_rule_based_conversion(self, sql: str, explanations: List[str], warnings: List[str]) -> str:
+        """Apply rule-based conversions including JSON ops, datatypes, functions, and subquery refactors."""
+        original_sql = sql
+
+        # Function-level rewrites (FILTER -> CASE WHEN, NOW timezone, remove ::json, etc.)
+        sql = self.rules.apply_patterns(sql, 'functions')
+        if sql != original_sql:
+            explanations.append("Normalized function usage (FILTER -> CASE WHEN, NOW timezone, POSITION -> STRPOS, etc.)")
+            original_sql = sql
+
+        # JSON operators and paths after removing ::json/::jsonb
+        sql = self.rules.apply_patterns(sql, 'json')
+        if sql != original_sql:
+            explanations.append("Converted PostgreSQL JSON operators to Firebolt JSON_VALUE/JSON_POINTER_EXTRACT_TEXT")
+            original_sql = sql
+
+        # Data type normalizations (:: casting, uppercase types)
+        sql = self.rules.apply_patterns(sql, 'datatypes')
+        if sql != original_sql:
+            explanations.append("Normalized data types and :: casting style for Firebolt")
+            original_sql = sql
+
+        # Critical: Refactor scalar subqueries inside EXTRACT()
+        refactored_sql, refactor_info = self._refactor_extract_scalar_subqueries(sql)
+        if refactored_sql != sql:
+            sql = refactored_sql
+            explanations.append("Refactored scalar subquery inside EXTRACT() into derived subquery in FROM")
+            if refactor_info.get('notes'):
+                warnings.extend(refactor_info['notes'])
+
+        # Collect warnings for other unsupported constructs detected
+        warnings.extend(self.rules.detect_unsupported_features(sql))
+
         return sql
+
+    def _refactor_extract_scalar_subqueries(self, sql: str) -> Tuple[str, Dict[str, List[str]]]:
+        """Refactor patterns like EXTRACT(MONTH FROM (SELECT MAX(col::date) FROM table))
+        into a derived subquery added to FROM and replace inline EXTRACT references.
+
+        This is a heuristic implementation aimed at the known problematic patterns.
+        """
+        notes: List[str] = []
+        subqueries_to_add: List[Tuple[str, str]] = []  # list of (subquery_sql, alias)
+        replacements: List[Tuple[str, str]] = []       # list of (old, new)
+
+        # Regex to capture EXTRACT(part FROM (SELECT MAX(expr) FROM table ...))
+        pattern = re.compile(
+            r"EXTRACT\s*\(\s*(MONTH|YEAR)\s+FROM\s*\(\s*SELECT\s+MAX\s*\(\s*([^\)]+?)\s*\)\s+from\s+([^)]+?)\s*\)\s*\)",
+            re.IGNORECASE | re.DOTALL
+        )
+
+        alias_counter = 1
+        used_aliases: List[str] = []
+
+        def build_alias(expr: str) -> str:
+            expr_l = expr.lower()
+            if 'agreementdate' in expr_l:
+                return 'max_agreement_date'
+            # Fallback generic alias
+            return 'max_value'
+
+        def ensure_unique_alias(alias_base: str) -> str:
+            nonlocal alias_counter
+            alias = alias_base
+            while alias in used_aliases:
+                alias = f"{alias_base}_{alias_counter}"
+                alias_counter += 1
+            used_aliases.append(alias)
+            return alias
+
+        matches = list(pattern.finditer(sql))
+        if not matches:
+            return sql, {'notes': notes}
+
+        # Map each distinct scalar subquery to an alias so we can reuse
+        seen_inner_to_alias: Dict[str, Tuple[str, str]] = {}
+
+        for m in matches:
+            part = m.group(1)
+            expr = m.group(2).strip()
+            table_part = m.group(3).strip()
+
+            inner_select = f"SELECT MAX({expr}) FROM {table_part}"
+            if inner_select not in seen_inner_to_alias:
+                col_alias = ensure_unique_alias(build_alias(expr))
+                sub_alias = 'sub' if 'sub' not in used_aliases else ensure_unique_alias('sub')
+                derived_sql = f"(SELECT MAX({expr}) AS {col_alias} FROM {table_part}) AS {sub_alias}"
+                seen_inner_to_alias[inner_select] = (sub_alias, col_alias)
+                subqueries_to_add.append((derived_sql, sub_alias))
+
+            sub_alias, col_alias = seen_inner_to_alias[inner_select]
+
+            # Replacement: EXTRACT(part FROM (SELECT MAX(expr) FROM table)) -> EXTRACT(part FROM sub_alias.col_alias)
+            full_old = m.group(0)
+            full_new = f"EXTRACT({part} FROM {sub_alias}.{col_alias})"
+            replacements.append((full_old, full_new))
+
+        # Apply replacements
+        refactored = sql
+        for old, new in replacements:
+            refactored = refactored.replace(old, new)
+
+        # Insert derived subqueries into FROM list before WHERE/GROUP/ORDER/LIMIT
+        insertion = ", " + ", ".join([sq for sq, _ in subqueries_to_add]) if subqueries_to_add else ''
+        if insertion:
+            # Find insertion point
+            m_from = re.search(r"\bFROM\b", refactored, re.IGNORECASE)
+            if m_from:
+                # Find clause boundary
+                boundary = len(refactored)
+                for kw in [r"\bWHERE\b", r"\bGROUP\s+BY\b", r"\bORDER\s+BY\b", r"\bLIMIT\b"]:
+                    m_kw = re.search(kw, refactored[m_from.end():], re.IGNORECASE)
+                    if m_kw:
+                        boundary = min(boundary, m_from.end() + m_kw.start())
+                # Insert before boundary
+                refactored = refactored[:boundary] + insertion + refactored[boundary:]
+            else:
+                notes.append("Could not find FROM clause to insert derived subquery; left EXTRACT replacement only.")
+
+        return refactored, {'notes': notes}
     
     def _convert_json_operations(self, sql: str) -> str:
         """REMOVED - OpenAI-only approach"""
@@ -310,6 +424,8 @@ PostgreSQL Query:
 
 Return ONLY the equivalent Firebolt SQL, no explanation:"""
 
+            # Import on-demand to avoid hard dependency
+            import openai  # type: ignore
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
