@@ -305,27 +305,66 @@ Firebolt uses a PostgreSQL-compliant SQL dialect but has specific function signa
             full_new = f"EXTRACT({part} FROM {sub_alias}.{col_alias})"
             replacements.append((full_old, full_new))
 
-        # Apply replacements
+        # Apply replacements to change EXTRACT(...) calls
         refactored = sql
         for old, new in replacements:
             refactored = refactored.replace(old, new)
 
-        # Insert derived subqueries into FROM list before WHERE/GROUP/ORDER/LIMIT
-        insertion = ", " + ", ".join([sq for sq, _ in subqueries_to_add]) if subqueries_to_add else ''
-        if insertion:
-            # Find insertion point
-            m_from = re.search(r"\bFROM\b", refactored, re.IGNORECASE)
-            if m_from:
-                # Find clause boundary
+        # Add derived subqueries to FROM clause
+        if subqueries_to_add:
+            subquery_clause = ", ".join([sq for sq, _ in subqueries_to_add])
+            
+            # Find the main FROM clause (not EXTRACT FROM)
+            # Look for FROM that follows table patterns and isn't part of EXTRACT
+            from_matches = []
+            for match in re.finditer(r'\bFROM\b', refactored, re.IGNORECASE):
+                # Check if this FROM is part of an EXTRACT function
+                before_from = refactored[:match.start()].strip()
+                if re.search(r'EXTRACT\s*\(\s*(?:MONTH|YEAR|DAY|HOUR|MINUTE|SECOND)\s*$', before_from, re.IGNORECASE):
+                    continue  # Skip EXTRACT FROM
+                from_matches.append(match)
+            
+            if from_matches:
+                # Use the first valid FROM clause (main table FROM)
+                main_from = from_matches[0]
+                insertion = ", " + subquery_clause
+                
+                # Find where current FROM clause ends (before WHERE/GROUP/ORDER/LIMIT/HAVING)
+                search_start = main_from.end()
                 boundary = len(refactored)
-                for kw in [r"\bWHERE\b", r"\bGROUP\s+BY\b", r"\bORDER\s+BY\b", r"\bLIMIT\b"]:
-                    m_kw = re.search(kw, refactored[m_from.end():], re.IGNORECASE)
+                
+                for kw in [r"\bWHERE\b", r"\bGROUP\s+BY\b", r"\bORDER\s+BY\b", r"\bLIMIT\b", r"\bHAVING\b"]:
+                    m_kw = re.search(kw, refactored[search_start:], re.IGNORECASE)
                     if m_kw:
-                        boundary = min(boundary, m_from.end() + m_kw.start())
-                # Insert before boundary
-                refactored = refactored[:boundary] + insertion + refactored[boundary:]
+                        boundary = min(boundary, search_start + m_kw.start())
+                
+                # Insert with proper spacing
+                before_insert = refactored[:boundary].rstrip()
+                after_insert = refactored[boundary:].lstrip()
+                space_after = " " if after_insert and not after_insert.startswith('\n') else ""
+                
+                refactored = before_insert + insertion + space_after + after_insert
             else:
-                notes.append("Could not find FROM clause to insert derived subquery; left EXTRACT replacement only.")
+                # No FROM clause - need to add one after the SELECT part
+                select_match = re.search(r"\bSELECT\b", refactored, re.IGNORECASE)
+                if select_match:
+                    # Find where SELECT ends (before WHERE/GROUP/ORDER/LIMIT/semicolon)
+                    select_start = select_match.end()
+                    boundary = len(refactored)
+                    
+                    for kw in [r"\bWHERE\b", r"\bGROUP\s+BY\b", r"\bORDER\s+BY\b", r"\bLIMIT\b", r"\bHAVING\b", r";"]:
+                        m_kw = re.search(kw, refactored[select_start:], re.IGNORECASE)
+                        if m_kw:
+                            boundary = min(boundary, select_start + m_kw.start())
+                    
+                    # Split and add FROM clause
+                    select_part = refactored[:boundary].rstrip()
+                    rest_part = refactored[boundary:].lstrip()
+                    space_after = " " if rest_part and not rest_part.startswith('\n') and not rest_part.startswith(';') else ""
+                    
+                    refactored = select_part + f" FROM {subquery_clause}" + space_after + rest_part
+                else:
+                    notes.append("Could not find SELECT clause to add FROM with derived subquery.")
 
         return refactored, {'notes': notes}
     

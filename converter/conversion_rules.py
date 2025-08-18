@@ -70,6 +70,11 @@ class ConversionRules:
              "NOW() AT TIME ZONE 'Asia/Kolkata'"),
              
             # PostgreSQL FILTER clause -> CASE WHEN (critical conversion!)
+            # Special handling for array_agg with distinct and FILTER
+            (re.compile(r'array_agg\s*\(\s*distinct\s+([^)]+)\s*\)\s*FILTER\s*\(\s*WHERE\s+([^)]+)\s*\)', re.IGNORECASE),
+             lambda m: f"array_agg(distinct CASE WHEN {m.group(2)} THEN {m.group(1)} ELSE NULL END)"),
+             
+            # General FILTER clause -> CASE WHEN for other aggregate functions
             (re.compile(r'(\w+)\s*\(\s*([^)]+)\s*\)\s*FILTER\s*\(\s*WHERE\s+([^)]+)\s*\)', re.IGNORECASE),
              lambda m: f"{m.group(1)}(CASE WHEN {m.group(3)} THEN {m.group(2)} ELSE 0 END)"),
              
